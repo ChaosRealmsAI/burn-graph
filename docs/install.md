@@ -9,7 +9,7 @@ second JavaScript runtime.
 Prerequisite: Bun 1.2.17 or newer.
 
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.2.tgz
+bun add --global ./burn-graph-0.1.0-dev.3.tgz
 burn-graph --version
 ```
 
@@ -24,7 +24,7 @@ bun run install:local
 ```
 
 `install:local` builds the CLI and Viewer, creates
-`dist/releases/burn-graph-0.1.0-dev.2.tgz`, and installs that exact archive.
+`dist/releases/burn-graph-0.1.0-dev.3.tgz`, and installs that exact archive.
 
 An isolated prefix is available for clean-room checks:
 

@@ -21,23 +21,23 @@
     },
     "apps/cli": {
       "name": "@burn-graph/cli",
-      "version": "0.1.0-dev.2",
+      "version": "0.1.0-dev.3",
     },
     "apps/product-preview": {
       "name": "@burn-graph/product-preview",
-      "version": "0.1.0-dev.2",
+      "version": "0.1.0-dev.3",
     },
     "apps/viewer": {
       "name": "@burn-graph/viewer",
-      "version": "0.1.0-dev.2",
+      "version": "0.1.0-dev.3",
     },
     "packages/core": {
       "name": "@burn-graph/core",
-      "version": "0.1.0-dev.2",
+      "version": "0.1.0-dev.3",
     },
     "packages/design-system": {
       "name": "@burn-graph/design-system",
-      "version": "0.1.0-dev.2",
+      "version": "0.1.0-dev.3",
     },
   },
   "packages": {

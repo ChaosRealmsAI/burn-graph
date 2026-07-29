@@ -27,7 +27,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.2.tgz",
+  "burn-graph-0.1.0-dev.3.tgz",
 );
 const roots: string[] = [];
 
@@ -190,7 +190,7 @@ describe("lightweight Bun package", () => {
       schemaVersion: 1,
       ok: true,
       command: "version",
-      data: { version: "0.1.0-dev.2" },
+      data: { version: "0.1.0-dev.3" },
     });
 
     const installedPackage = path.join(

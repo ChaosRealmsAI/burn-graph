@@ -10,7 +10,7 @@ unlocks and returns successors across parallel nodes and multiple graphs.
 With Bun 1.2.17 or newer, installation is one local package command:
 
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.2.tgz
+bun add --global ./burn-graph-0.1.0-dev.3.tgz
 burn-graph --version
 ```
 
@@ -43,3 +43,10 @@ JSON envelope. Start with `burn-graph --help` or
 
 See [installation](docs/install.md), [the CLI contract](docs/cli.md), and the
 [GraphSpec reference](docs/graph-spec.md).
+
+## Repository boundary
+
+This is the independently versioned code and public-documentation repository
+inside Burn Workspace V6. Formal product, BDD, architecture, milestone, and
+Evidence contracts live in the sibling `../privacy` repository and are never
+included in the release package.

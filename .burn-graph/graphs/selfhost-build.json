@@ -44,8 +44,8 @@
           "Keep burn-graph provider-neutral."
         ],
         "mustRead": [
-          "privacy/spec/bdd/S01-graph-runtime.feature",
-          "privacy/spec/architecture.md"
+          "../privacy/bdd/S01-graph-runtime.feature",
+          "../privacy/architecture.md"
         ],
         "doneWhen": [
           "Typecheck and core tests pass.",
@@ -92,7 +92,7 @@
           "Inspect wide and narrow screenshots."
         ],
         "mustRead": [
-          "privacy/spec/user-paths/UP03-human-watches.md",
+          "../privacy/user-paths/UP03-human-watches.md",
           "packages/design-system/source/design-language.md"
         ],
         "doneWhen": [
@@ -180,8 +180,8 @@
           "Return repair for every confirmed blocker."
         ],
         "mustRead": [
-          "privacy/spec/milestones/M01-v0.1.md",
-          "privacy/spec/project.json"
+          "../privacy/milestones/M01-v0.1.md",
+          "../privacy/project.json"
         ],
         "doneWhen": [
           "Exactly one route is returned with a concrete evidence summary."

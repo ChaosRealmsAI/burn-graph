@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-v6-placement",
+  "title": "Verify the V6 dual-repository placement",
+  "goal": "Prove burn-graph operates from Burn Workspace V6 while code, public documentation, and Product Private truth keep explicit repository boundaries.",
+  "revision": 1,
+  "maxActive": 3,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start V6 placement proof",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "code-boundary"
+        },
+        {
+          "to": "privacy-boundary"
+        },
+        {
+          "to": "package-proof"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "code-boundary",
+      "type": "task",
+      "title": "Verify the code repository boundary",
+      "prompt": {
+        "objective": "Confirm the original Git history now lives only in the V6 code repository and no Product Private tree remains inside it.",
+        "instructions": [
+          "Inspect the exact repository root and tracked file set.",
+          "Treat a second active root checkout or tracked private contract as a blocker."
+        ],
+        "mustRead": [
+          "AGENTS.md",
+          "README.md"
+        ],
+        "doneWhen": [
+          "The code repository preserves its pre-migration history.",
+          "The former claudeWang root location is absent.",
+          "No privacy/spec tree is tracked in the code repository."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "repository",
+        "code"
+      ]
+    },
+    {
+      "id": "privacy-boundary",
+      "type": "task",
+      "title": "Verify the privacy repository boundary",
+      "prompt": {
+        "objective": "Validate the independent Product Private repository, V6 principle inheritance, project control schema, and every live cross-repository path.",
+        "instructions": [
+          "Resolve paths from the privacy repository root.",
+          "Keep historical Evidence separate from generated runtime data."
+        ],
+        "mustRead": [
+          "../privacy/AGENTS.md",
+          "../privacy/project.json",
+          "../privacy/principles.json"
+        ],
+        "doneWhen": [
+          "The privacy repository has an independent Git root.",
+          "project.json validates and all current references exist.",
+          "No absolute home path or runtime payload is tracked."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "repository",
+        "privacy"
+      ]
+    },
+    {
+      "id": "package-proof",
+      "type": "task",
+      "title": "Verify the V6 release package",
+      "prompt": {
+        "objective": "Build and install the current release from its V6 code path while proving Product Private files stay outside the package.",
+        "instructions": [
+          "Use the full verification command and isolated install E2E.",
+          "Inspect archive entries instead of assuming repository boundaries affect packaging."
+        ],
+        "mustRead": [
+          "docs/install.md",
+          "scripts/build/package.ts",
+          "../privacy/bdd/S03-lightweight-install.feature"
+        ],
+        "doneWhen": [
+          "Full verification passes from the V6 code path.",
+          "The archive declares zero dependencies.",
+          "No Product Private file appears in the archive."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "package",
+        "install"
+      ]
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "title": "Converge V6 placement evidence",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "V6 placement verified",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

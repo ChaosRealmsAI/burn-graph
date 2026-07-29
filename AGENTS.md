@@ -5,6 +5,10 @@ description: AI-first local prompt graph control plane with a read-only live Mer
 
 # burn-graph
 
+Before work, read `../../../principles.json`. Product Private truth lives in
+the sibling `../privacy` repository; read its `AGENTS.md` before changing a
+product contract.
+
 ## Product boundary
 
 - burn-graph owns project-local graph definitions, graph-run state,
@@ -15,8 +19,13 @@ description: AI-first local prompt graph control plane with a read-only live Mer
   guarded prompt Assignments and report outcomes.
 - Graph specifications are JSON. Runtime state is SQLite. The CLI is the only
   supported write surface.
-- Existing sibling projects in the parent workspace are not dependencies and
-  must not be modified for burn-graph work.
+- This repository owns code and public technical documentation only. Product,
+  BDD, architecture, milestone, feedback, and Evidence facts belong to the
+  independent sibling `../privacy` repository.
+- Existing sibling projects in the V6 workspace are not dependencies. Coupling
+  with `burning` and `burn-subagent` is JSON CLI contracts, never code imports.
+- A code change must not silently edit or commit the privacy repository, and a
+  privacy change must not be staged in this repository.
 
 ## Architecture
 

@@ -74,7 +74,7 @@
         ],
         "mustRead": [
           "apps/cli/src/viewer-runtime.ts",
-          "privacy/spec/bdd/S02-live-viewer.feature"
+          "../privacy/bdd/S02-live-viewer.feature"
         ],
         "doneWhen": [
           "Start and status report healthy.",

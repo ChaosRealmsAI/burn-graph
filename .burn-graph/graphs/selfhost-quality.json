@@ -41,7 +41,7 @@
           "Generate result.json and HTML Evidence."
         ],
         "mustRead": [
-          "privacy/spec/user-paths"
+          "../privacy/user-paths"
         ],
         "doneWhen": [
           "Every path has an external visible oracle and screenshot."
@@ -71,8 +71,8 @@
           "Fail on secrets, telemetry, broad process cleanup, or path traversal."
         ],
         "mustRead": [
-          "privacy/spec/principles.json",
-          "privacy/spec/architecture.md"
+          "../privacy/principles.json",
+          "../privacy/architecture.md"
         ],
         "doneWhen": [
           "No unaccepted privacy or security finding remains."

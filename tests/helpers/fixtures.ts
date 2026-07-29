@@ -284,7 +284,7 @@ export function convergenceGraph(id = "delivery"): GraphSpec {
             "Read the declared context before changing code.",
             "Report only externally verifiable evidence.",
           ],
-          mustRead: ["README.md", "privacy/spec/bdd/S01-graph-runtime.feature"],
+          mustRead: ["README.md", "docs/graph-spec.md"],
           doneWhen: ["Typecheck passes.", "The public CLI path passes."],
           outputSchema: requiredOutput,
         },

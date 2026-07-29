@@ -112,8 +112,8 @@
         ],
         "mustRead": [
           "README.md",
-          "privacy/spec/product.md",
-          "privacy/spec/architecture.md"
+          "../privacy/product.md",
+          "../privacy/architecture.md"
         ],
         "doneWhen": [
           "Current documentation contains no executable legacy command.",
@@ -165,8 +165,8 @@
           "Route repair for any confirmed public-loop blocker."
         ],
         "mustRead": [
-          "privacy/spec/milestones/M02-cli-convergence.md",
-          "privacy/spec/project.json"
+          "../privacy/milestones/M02-cli-convergence.md",
+          "../privacy/project.json"
         ],
         "doneWhen": [
           "Exactly one declared route is returned with concrete evidence."

@@ -24,7 +24,7 @@ import {
   viewerInstanceStatus,
 } from "./viewer-runtime.ts";
 
-const VERSION = "0.1.0-dev.2";
+const VERSION = "0.1.0-dev.3";
 const GRAPH_STATUSES: readonly GraphStatus[] = [
   "draft",
   "running",
