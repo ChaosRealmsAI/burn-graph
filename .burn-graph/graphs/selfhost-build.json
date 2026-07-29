@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-build",
+  "title": "Finish burn-graph v0.1 through burn-graph",
+  "goal": "Verify the graph engine, ship the live Viewer, prove lightweight installation, and converge through an explicit quality decision.",
+  "revision": 4,
+  "maxActive": 4,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start self-hosting",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "core-tests"
+        },
+        {
+          "to": "live-viewer"
+        },
+        {
+          "to": "install-proof"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "core-tests",
+      "type": "task",
+      "title": "Prove graph convergence",
+      "prompt": {
+        "objective": "Implement and pass unit and integration tests for validation, transitions, concurrency, bounded loops, and restart recovery.",
+        "instructions": [
+          "Include known-bad controls.",
+          "Use only the public CLI for blackbox state mutations.",
+          "Keep burn-graph provider-neutral."
+        ],
+        "mustRead": [
+          "privacy/spec/bdd/S01-graph-runtime.feature",
+          "privacy/spec/architecture.md"
+        ],
+        "doneWhen": [
+          "Typecheck and core tests pass.",
+          "Two-process duplicate claim test proves one winner.",
+          "A repair route preserves attempts and converges."
+        ],
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "checks"
+          ],
+          "properties": {
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "core",
+        "verification"
+      ]
+    },
+    {
+      "id": "live-viewer",
+      "type": "task",
+      "title": "Ship the live Mermaid Viewer",
+      "prompt": {
+        "objective": "Connect the production React Viewer to canonical snapshots and SSE, then verify its visible states.",
+        "instructions": [
+          "Reuse the design-system Regions.",
+          "Keep every HTTP route read-only.",
+          "Inspect wide and narrow screenshots."
+        ],
+        "mustRead": [
+          "privacy/spec/user-paths/UP03-human-watches.md",
+          "packages/design-system/source/design-language.md"
+        ],
+        "doneWhen": [
+          "Viewer shows all self-hosted graphs.",
+          "Mermaid status changes after CLI mutation without reload.",
+          "Browser E2E produces valid Evidence."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "ui",
+      "tags": [
+        "viewer",
+        "e2e"
+      ]
+    },
+    {
+      "id": "install-proof",
+      "type": "task",
+      "title": "Prove the lightweight install path",
+      "prompt": {
+        "objective": "Package and install burn-graph into an isolated Bun prefix, then operate it outside the source tree.",
+        "instructions": [
+          "Install the release archive with one Bun global package command.",
+          "Require no package dependencies.",
+          "Measure archive size, installed size, and install duration."
+        ],
+        "mustRead": [
+          "docs/install.md"
+        ],
+        "doneWhen": [
+          "The archive is under 2 MB.",
+          "The source package.json and bun.lock are unchanged by installation.",
+          "Unsafe --prefix and inherited BUN_INSTALL values are rejected.",
+          "The installed command can run parallel nodes and persist a graph.",
+          "The packaged Viewer is healthy and read-only."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "release",
+      "tags": [
+        "install",
+        "release"
+      ]
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "title": "Converge implementation",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "verify"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "verify",
+      "type": "decision",
+      "title": "Accept or repair v0.1",
+      "prompt": {
+        "objective": "Choose pass only when product, runtime, E2E, privacy, and lightweight installation evidence all satisfy M01.",
+        "instructions": [
+          "Read the real diff and generated Evidence.",
+          "Return repair for every confirmed blocker."
+        ],
+        "mustRead": [
+          "privacy/spec/milestones/M01-v0.1.md",
+          "privacy/spec/project.json"
+        ],
+        "doneWhen": [
+          "Exactly one route is returned with a concrete evidence summary."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "all gates pass"
+        },
+        {
+          "to": "core-tests",
+          "route": "repair",
+          "label": "fix blockers",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "quality",
+      "tags": [
+        "quality",
+        "decision"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "v0.1 converged",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

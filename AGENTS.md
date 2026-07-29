@@ -1,0 +1,61 @@
+---
+name: burn-graph
+description: AI-first local prompt graph control plane with a read-only live Mermaid viewer.
+---
+
+# burn-graph
+
+## Product boundary
+
+- burn-graph owns project-local graph definitions, graph-run state, claims,
+  transitions, evidence references, event history, Mermaid projection, and the
+  local read-only viewer.
+- burn-graph never launches a model, dispatches a subagent, executes a task,
+  runs a verifier, or interprets task output. AI callers use the CLI to claim
+  work and report outcomes.
+- Graph specifications are JSON. Runtime state is SQLite. The CLI is the only
+  supported write surface.
+- Existing sibling projects in the parent workspace are not dependencies and
+  must not be modified for burn-graph work.
+
+## Architecture
+
+- `packages/core` owns all graph contracts, validation, state transitions,
+  SQLite persistence, assignment packets, events, and Mermaid generation.
+- `packages/design-system` owns visual language, tokens, React components, and
+  complete graph dashboard/detail Regions.
+- `apps/cli` maps arguments and JSON stdin to core calls; it owns no graph
+  policy.
+- `apps/viewer` is the production read-only local web surface.
+- `apps/product-preview` renders deterministic scenarios from the exact design
+  system Regions.
+
+## Commands
+
+- Source setup: `bun install --frozen-lockfile`
+- Build the lightweight release: `bun run release:pack`
+- Install the local release: `bun run install:local`
+- Typecheck: `bun run check`
+- Unit and integration tests: `bun run test`
+- Build all artifacts: `bun run build`
+- Full verification: `bun run verify`
+- Development CLI: `bun run burn-graph -- --help`
+- Product Preview: `bun run preview`
+- Start named Viewer: `bun run viewer:start -- <name> <project-root> [port]`
+- Viewer status: `bun run viewer:status -- <name>`
+- Stop named Viewer: `bun run viewer:stop -- <name>`
+- Blackbox E2E: `bun run e2e`
+
+Viewer instances support parallel operation when they use distinct names,
+project roots, and ports. Runtime scripts release only their recorded PID.
+
+## Implementation rules
+
+- TypeScript is strict. Shared contracts exist only in `packages/core`.
+- Comments are English and explain only non-obvious invariants or safety
+  boundaries.
+- Runtime writes stay beneath the discovered project's `.burn-graph/runtime`.
+- Do not embed prompts, task results, credentials, or absolute user paths in
+  shareable logs or committed Evidence.
+- Every state mutation is transactional and emits exactly one durable event.
+- The Viewer remains read-only; no browser request may mutate graph state.

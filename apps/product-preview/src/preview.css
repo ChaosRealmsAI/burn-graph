@@ -1,0 +1,53 @@
+.preview-controls {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem max(1rem, calc((100vw - 1500px) / 2));
+  border-bottom: 1px solid #3a4560;
+  background: rgba(17, 22, 33, 0.94);
+  backdrop-filter: blur(16px);
+  color: #a7b1c2;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.preview-controls > div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.preview-controls button {
+  min-height: 32px;
+  padding: 0 0.75rem;
+  border: 1px solid #2b3548;
+  border-radius: 999px;
+  background: transparent;
+  color: #a7b1c2;
+  cursor: pointer;
+}
+
+.preview-controls button:hover,
+.preview-controls button.is-active {
+  border-color: #6e9fff;
+  background: rgba(110, 159, 255, 0.12);
+  color: #f3f6fb;
+}
+
+@media (max-width: 760px) {
+  .preview-controls {
+    position: relative;
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 0.75rem 1rem;
+  }
+
+  .preview-controls > div {
+    width: 100%;
+    overflow-x: auto;
+  }
+}

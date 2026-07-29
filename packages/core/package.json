@@ -1,0 +1,9 @@
+{
+  "name": "@burn-graph/core",
+  "version": "0.1.0-dev.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

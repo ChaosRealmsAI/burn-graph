@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-quality",
+  "title": "Independent burn-graph quality evidence",
+  "goal": "Attack the public CLI and read-only Viewer from outside their core implementation before accepting v0.1.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start quality graph",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "blackbox"
+        },
+        {
+          "to": "privacy-review"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "blackbox",
+      "type": "task",
+      "title": "Replay every public path",
+      "prompt": {
+        "objective": "Use the built CLI and browser from their public entries without private state mutation.",
+        "instructions": [
+          "Replay UP01, UP02, and UP03.",
+          "Capture the first visible divergence.",
+          "Generate result.json and HTML Evidence."
+        ],
+        "mustRead": [
+          "privacy/spec/user-paths"
+        ],
+        "doneWhen": [
+          "Every path has an external visible oracle and screenshot."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "blackbox",
+      "tags": [
+        "blackbox",
+        "e2e"
+      ]
+    },
+    {
+      "id": "privacy-review",
+      "type": "task",
+      "title": "Audit local-only boundaries",
+      "prompt": {
+        "objective": "Verify local binding, path containment, prompt privacy, and absence of mutation HTTP routes.",
+        "instructions": [
+          "Inspect the real diff and HTTP behavior.",
+          "Fail on secrets, telemetry, broad process cleanup, or path traversal."
+        ],
+        "mustRead": [
+          "privacy/spec/principles.json",
+          "privacy/spec/architecture.md"
+        ],
+        "doneWhen": [
+          "No unaccepted privacy or security finding remains."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "review",
+      "tags": [
+        "security",
+        "review"
+      ]
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "title": "Converge quality evidence",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Quality evidence complete",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

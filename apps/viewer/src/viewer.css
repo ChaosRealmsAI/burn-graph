@@ -1,0 +1,35 @@
+.viewer-error {
+  display: grid;
+  width: min(720px, calc(100% - 32px));
+  min-height: 100vh;
+  margin: 0 auto;
+  place-content: center;
+  text-align: center;
+}
+
+.viewer-error > span {
+  color: var(--state-failed);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.viewer-error h1 {
+  margin: var(--space-4) 0 var(--space-3);
+  font-size: var(--text-xl);
+}
+
+.viewer-error p {
+  color: var(--text-secondary);
+}
+
+.viewer-error button {
+  min-height: 42px;
+  margin: var(--space-4) auto 0;
+  padding: 0 var(--space-5);
+  border: 1px solid var(--state-ready);
+  border-radius: var(--radius-pill);
+  background: var(--accent-wash);
+  cursor: pointer;
+}

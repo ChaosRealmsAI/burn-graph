@@ -1,0 +1,46 @@
+{
+  "name": "burn-graph",
+  "version": "0.1.0-dev.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.2.17",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "bin": {
+    "burn-graph": "./dist/burn-graph.js"
+  },
+  "scripts": {
+    "burn-graph": "bun apps/cli/src/index.ts",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test tests/unit tests/integration",
+    "build:cli": "bun build apps/cli/src/index.ts --target bun --outfile dist/burn-graph.js",
+    "build:viewer": "bun --bun vite build --config apps/viewer/vite.config.ts",
+    "build:preview": "bun --bun vite build --config apps/product-preview/vite.config.ts",
+    "build": "bun run build:cli && bun run build:viewer && bun run build:preview",
+    "release:pack": "bun run build:cli && bun run build:viewer && bun scripts/build/package.ts",
+    "install:local": "bun run release:pack && bun scripts/install/local.ts",
+    "preview": "bun --bun vite --config apps/product-preview/vite.config.ts --host 127.0.0.1",
+    "viewer:start": "bun scripts/runtime/viewer.ts start",
+    "viewer:status": "bun scripts/runtime/viewer.ts status",
+    "viewer:stop": "bun scripts/runtime/viewer.ts stop",
+    "e2e": "bun run release:pack && bun test tests/e2e",
+    "verify": "bun run check && bun run test && bun run build && bun run e2e"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "6.0.4",
+    "commander": "15.0.0",
+    "mermaid": "11.16.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "vite": "8.1.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "typescript": "7.0.2"
+  }
+}
