@@ -8,23 +8,26 @@ state. It can invoke local CLI commands and read JSON stdout.
 ## Path
 
 The AI initializes burn-graph, submits a complete GraphSpec, validates it, and
-starts the graph. The Start node activates two Task nodes in parallel. The AI
-lists Ready work, claims one node, receives a bounded assignment packet, does
-the task externally, checkpoints, and reports completion with a result.
-Another actor claims and completes the second task. A Join waits until both
-activated branches settle. A Decision then returns `repair`, reopening a
-bounded earlier region while preserving its first Attempt. After repair the
-Decision returns `pass`; End completes the graph. At every step, duplicate
-claims and stale revisions return structured errors without corrupting state.
+starts it with an Actor ID. Start activates two Tasks and the same command
+immediately returns both complete Assignment packets. The AI executes the
+prompts externally, optionally checkpoints by Assignment ID, and reports each
+result with `done`. Completion automatically unlocks and returns legal
+successors; the AI never calls a separate unlock or direct-node claim command.
+A Join waits until both branches settle. A Decision returns `repair`, reopening
+the bounded earlier Task with a new Assignment and preserved Attempt context.
+After repair the Decision returns `pass`; End completes the graph.
 
 ## Variants and recovery
 
-The AI may block, release, fail, retry, or switch focus between claimed nodes.
-An expired lease returns eligible work to Ready through reconciliation. A
+The AI may block, release, fail, retry, or switch focus between owned
+Assignments. `current` recovers complete prompt packets after interruption.
+An expired lease returns eligible work to Ready through reconciliation. The
+same `done` input is safe to replay; a conflicting replay is rejected. A
 process restart retains definitions, attempts, results, and event order.
 
 ## End-to-end oracle
 
 The CLI snapshot reports the graph `completed`, every activated node has a
 terminal state, skipped routes are explicit, the bounded loop count is one,
-and the event history can reconstruct each transition.
+each Attempt has one Assignment identity, and event history reconstructs every
+transition.

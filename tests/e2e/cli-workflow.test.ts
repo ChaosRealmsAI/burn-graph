@@ -1,51 +1,30 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 
 import {
-  convergenceGraph,
   createTestDirectory,
+  loopGraph,
   parallelGraph,
   removeTestProject,
 } from "../helpers/fixtures.ts";
 
-interface CliEnvelope {
-  readonly ok: boolean;
-  readonly command: string;
-  readonly data?: any;
-  readonly error?: {
-    readonly code: string;
-    readonly retryable: boolean;
-  };
-}
-
-interface StepEvidence {
-  readonly id: string;
-  readonly action: string;
-  readonly oracle: string;
-  readonly status: "passed";
+interface CliResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly envelope: any;
 }
 
 const repositoryRoot = path.resolve(import.meta.dir, "../..");
 const cli = path.join(repositoryRoot, "dist", "burn-graph.js");
 const roots: string[] = [];
-let cliProcessCount = 0;
 
 async function invoke(
   root: string,
   args: readonly string[],
   stdin?: string,
-): Promise<{
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly envelope: CliEnvelope;
-}> {
-  cliProcessCount += 1;
+): Promise<CliResult> {
   const child = Bun.spawn(["bun", cli, "--root", root, ...args], {
     stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
@@ -60,12 +39,12 @@ async function invoke(
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]);
-  const json = (exitCode === 0 ? stdout : stderr).trim();
+  const serialized = (exitCode === 0 ? stdout : stderr).trim();
   return {
     exitCode,
     stdout,
     stderr,
-    envelope: JSON.parse(json) as CliEnvelope,
+    envelope: JSON.parse(serialized),
   };
 }
 
@@ -73,543 +52,475 @@ async function ok(
   root: string,
   args: readonly string[],
   stdin?: string,
-): Promise<CliEnvelope> {
+): Promise<any> {
   const result = await invoke(root, args, stdin);
   expect(result.exitCode, result.stderr).toBe(0);
-  expect(result.envelope.ok).toBe(true);
+  expect(result.envelope).toMatchObject({
+    schemaVersion: 1,
+    ok: true,
+  });
   return result.envelope;
 }
 
-function node(snapshot: any, nodeId: string): any {
-  const found = snapshot.nodes.find((candidate: any) => candidate.id === nodeId);
-  if (!found) throw new Error(`Missing node ${nodeId}`);
-  return found;
-}
-
-function record(
-  steps: StepEvidence[],
-  id: string,
-  action: string,
-  oracle: string,
-): void {
-  steps.push({ id, action, oracle, status: "passed" });
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function writeEvidence(
-  startedAt: string,
-  steps: readonly StepEvidence[],
-  publicCliProcesses: number,
-): void {
-  const evidenceRoot = path.join(repositoryRoot, ".tmp", "e2e", "cli");
-  mkdirSync(evidenceRoot, { recursive: true });
-  const report = {
+async function fail(
+  root: string,
+  args: readonly string[],
+  stdin?: string,
+): Promise<any> {
+  const result = await invoke(root, args, stdin);
+  expect(result.exitCode).toBe(1);
+  expect(result.envelope).toMatchObject({
     schemaVersion: 1,
-    runId: `cli-dogfood-${Date.now()}`,
-    status: "passed",
-    subject: {
-      product: "burn-graph",
-      version: "0.1.0-dev.1",
-      entrypoint: "dist/burn-graph.js",
-    },
-    userPaths: ["UP01", "UP02"],
-    startedAt,
-    completedAt: new Date().toISOString(),
-    steps,
-    metrics: {
-      publicCliProcesses,
-      graphsRunConcurrently: 2,
-      maximumParallelNodesObserved: 4,
-      boundedRepairTraversals: 1,
-    },
-  };
-  writeFileSync(
-    path.join(evidenceRoot, "result.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
+    ok: false,
+  });
+  return result.envelope;
+}
+
+function writeGraph(root: string, name: string, graph: unknown): string {
+  const file = path.join(root, `${name}.json`);
+  writeFileSync(file, `${JSON.stringify(graph, null, 2)}\n`);
+  return file;
+}
+
+function assignment(envelope: any, graphId: string, nodeId: string): any {
+  const found = envelope.data.assignments.find(
+    (candidate: any) =>
+      candidate.graph.graphId === graphId && candidate.node.id === nodeId,
   );
-  const rows = steps
-    .map(
-      (step) =>
-        `<tr><td>${escapeHtml(step.id)}</td><td>${escapeHtml(
-          step.action,
-        )}</td><td>${escapeHtml(step.oracle)}</td><td>${step.status}</td></tr>`,
-    )
-    .join("");
-  writeFileSync(
-    path.join(evidenceRoot, "index.html"),
-    `<!doctype html><html><head><meta charset="utf-8"><title>burn-graph CLI E2E</title><style>body{font-family:system-ui;max-width:1100px;margin:40px auto;padding:0 24px;color:#172033}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d8deea;padding:10px;text-align:left}th{background:#f4f7fb}td:last-child{color:#087443;font-weight:700}</style></head><body><h1>burn-graph CLI E2E</h1><p>Generated from a real public-CLI run. Status: passed.</p><table><thead><tr><th>Step</th><th>Action</th><th>External oracle</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></body></html>\n`,
-  );
+  if (!found) throw new Error(`Missing Assignment ${graphId}/${nodeId}`);
+  return found;
 }
 
 afterEach(() => {
   for (const root of roots.splice(0)) removeTestProject(root);
 });
 
-describe("AI operates burn-graph entirely through its CLI", () => {
-  test("confirms, starts, completes, routes, and converges parallel nodes across two graphs", async () => {
-    const startedAt = new Date().toISOString();
-    const steps: StepEvidence[] = [];
-    cliProcessCount = 0;
+describe("converged public CLI", () => {
+  test("progressively discloses JSON Help and rejects removed commands", async () => {
     const root = createTestDirectory();
     roots.push(root);
-    const deliveryFile = path.join(root, "delivery.json");
-    const researchFile = path.join(root, "research.json");
-    writeFileSync(deliveryFile, `${JSON.stringify(convergenceGraph())}\n`);
-    writeFileSync(
-      researchFile,
-      `${JSON.stringify(parallelGraph("research"))}\n`,
-    );
 
-    const initialized = await ok(root, ["init", root]);
-    expect(initialized.data.config.projectId).toMatch(/^burn-graph-test-/);
-    record(steps, "UP01-01", "Initialize project", "Project-local state is created.");
-
-    await ok(root, ["graph", "validate", "--input", deliveryFile]);
-    await ok(root, ["graph", "apply", "--input", deliveryFile]);
-    await ok(root, ["graph", "apply", "--input", researchFile]);
-    record(
-      steps,
-      "UP01-02",
-      "Validate and apply two GraphSpecs",
-      "Both graph revisions are accepted before execution.",
-    );
-
-    await ok(root, [
+    const rootHelp = await ok(root, ["--help"]);
+    expect(rootHelp.command).toBe("help");
+    expect(rootHelp.data.groups.execute).toEqual([
       "run",
-      "start",
-      "delivery",
-      "--run-id",
-      "delivery:e2e",
-    ]);
-    await ok(root, [
-      "run",
-      "start",
-      "research",
-      "--run-id",
-      "research:e2e",
-    ]);
-    const initiallyReady = await ok(root, ["work", "ready", "--all"]);
-    expect(initiallyReady.data).toHaveLength(5);
-    record(
-      steps,
-      "UP02-01",
-      "Start two graphs",
-      "Five tasks become Ready across two independent runs.",
-    );
-
-    const assignment = await ok(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "left",
-      "--actor",
-      "ai:implementation",
-      "--lease",
-      "300",
-    ]);
-    expect(assignment.data.node.prompt.objective).toBe(
-      "Implement the smallest verified core result.",
-    );
-    expect(assignment.data.node.prompt.mustRead).toEqual([
-      "README.md",
-      "privacy/spec/bdd/S01-graph-runtime.feature",
-    ]);
-    expect(assignment.data.node.prompt.doneWhen).toHaveLength(2);
-    expect(assignment.data.returnProtocol.complete).toContain(
-      "delivery:e2e left",
-    );
-    record(
-      steps,
-      "UP01-03",
-      "Claim a node",
-      "The assignment injects objective, instructions, Must Read, Done When, and return protocol.",
-    );
-
-    await ok(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "right",
-      "--actor",
-      "ai:verification",
-      "--lease",
-      "300",
-    ]);
-    const overLimit = await invoke(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "third",
-      "--actor",
-      "ai:review",
-      "--lease",
-      "300",
-    ]);
-    expect(overLimit.exitCode).toBe(1);
-    expect(overLimit.envelope.error?.code).toBe("MAX_ACTIVE_REACHED");
-    expect(overLimit.envelope.error?.retryable).toBe(true);
-
-    await ok(root, [
-      "work",
-      "claim",
-      "research:e2e",
-      "left",
-      "--actor",
-      "ai:research-left",
-      "--lease",
-      "300",
-    ]);
-    await ok(root, [
-      "work",
-      "claim",
-      "research:e2e",
-      "right",
-      "--actor",
-      "ai:research-right",
-      "--lease",
-      "300",
-    ]);
-    const parallelRuns = await ok(root, ["run", "list"]);
-    expect(
-      parallelRuns.data.reduce(
-        (count: number, run: any) => count + run.counts.running,
-        0,
-      ),
-    ).toBe(4);
-    record(
-      steps,
-      "UP02-02",
-      "Claim parallel nodes in both graphs",
-      "Four nodes overlap as Running while each graph enforces its own maxActive.",
-    );
-
-    const duplicate = await invoke(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "left",
-      "--actor",
-      "ai:duplicate",
-      "--lease",
-      "300",
-    ]);
-    expect(duplicate.exitCode).toBe(1);
-    expect(duplicate.envelope.error?.code).toBe("NODE_NOT_READY");
-    expect(duplicate.envelope.error?.retryable).toBe(true);
-    const current = await ok(root, [
-      "work",
+      "next",
       "current",
-      "--actor",
-      "ai:implementation",
+      "focus",
+      "done",
     ]);
-    expect(current.data.focused).toEqual({
-      runId: "delivery:e2e",
-      nodeId: "left",
+    expect(
+      rootHelp.data.commands.map((command: any) => command.name),
+    ).not.toContain("work");
+    for (const command of rootHelp.data.commands) {
+      const disclosed = await ok(root, [command.name, "--help"]);
+      expect(["area", "command"]).toContain(disclosed.data.kind);
+      if (disclosed.data.kind === "area") {
+        for (const child of disclosed.data.commands) {
+          expect(
+            (await ok(root, [command.name, child.name, "--help"])).data.kind,
+          ).toBe("command");
+        }
+      }
+    }
+
+    const areaHelp = await ok(root, ["inspect", "--help"]);
+    expect(areaHelp.data.kind).toBe("area");
+    expect(
+      areaHelp.data.commands.map((command: any) => command.name),
+    ).toEqual(["overview", "run", "node", "ready", "mermaid", "events"]);
+
+    const commandHelp = await ok(root, ["done", "--help"]);
+    expect(commandHelp.data).toMatchObject({
+      topic: "done",
+      kind: "command",
+      mutates: true,
     });
-    record(
-      steps,
-      "UP01-04",
-      "Reject a duplicate claim and inspect current work",
-      "Exactly one actor owns the node and can recover its focus.",
+    expect(commandHelp.data.errors).toContain("ASSIGNMENT_INPUT_CONFLICT");
+
+    const topicHelp = await ok(root, ["help", "ai-loop"]);
+    expect(topicHelp.data.content.sequence).toContain(
+      "burn-graph done --assignment <id> --input -",
+    );
+    expect((await ok(root, ["help", "inspect"])).data.kind).toBe("topic");
+    expect((await ok(root, ["help", "recover"])).data.kind).toBe("topic");
+    const missingDoneInput = await fail(root, ["done"]);
+    expect(missingDoneInput.command).toBe("done");
+    expect(missingDoneInput.recoveryActions[0].command).toBe(
+      "burn-graph done --help",
+    );
+    const version = await ok(root, ["--version"]);
+    expect(version.data.version).toBe("0.1.0-dev.2");
+
+    for (const removed of [
+      ["work", "--help"],
+      ["events", "list"],
+      ["mermaid", "anything"],
+      ["serve"],
+      ["run", "list"],
+      ["run", "show", "anything"],
+    ]) {
+      const rejected = await fail(root, removed);
+      expect(["HELP_TOPIC_NOT_FOUND", "INVALID_ARGUMENTS"]).toContain(
+        rejected.error.code,
+      );
+    }
+  });
+
+  test("starts, injects, loops, and completes parallel multi-Graph work", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    await ok(root, ["init"]);
+
+    const loopFile = writeGraph(root, "loop", loopGraph("guarded-loop"));
+    const parallelFile = writeGraph(
+      root,
+      "parallel",
+      parallelGraph("guarded-parallel"),
+    );
+    await ok(root, ["graph", "validate", "--input", loopFile]);
+    await ok(root, ["graph", "apply", "--input", loopFile]);
+    await ok(root, ["graph", "apply", "--input", parallelFile]);
+
+    const loopStart = await ok(root, [
+      "run",
+      "start",
+      "guarded-loop",
+      "--actor",
+      "primary",
+      "--run-id",
+      "guarded-loop:e2e",
+    ]);
+    const firstWork = assignment(loopStart, "guarded-loop", "work");
+    expect(firstWork).toMatchObject({
+      schemaVersion: 1,
+      projectId: path.basename(root),
+      node: {
+        id: "work",
+        type: "task",
+        attempt: 1,
+        prompt: {
+          objective: "Produce a verified result.",
+        },
+      },
+      claim: { actorId: "primary" },
+    });
+    expect(firstWork.returnProtocol.complete).toBe(
+      `burn-graph done --assignment ${firstWork.assignmentId} --input -`,
     );
 
+    const parallelStart = await ok(root, [
+      "run",
+      "start",
+      "guarded-parallel",
+      "--actor",
+      "primary",
+      "--run-id",
+      "guarded-parallel:e2e",
+    ]);
+    expect(parallelStart.data.assignments).toHaveLength(3);
+    const left = assignment(parallelStart, "guarded-parallel", "left");
+    const right = assignment(parallelStart, "guarded-parallel", "right");
+
+    const current = await ok(root, ["current", "--actor", "primary"]);
+    expect(current.data.assignments).toHaveLength(3);
+    const focused = await ok(root, [
+      "focus",
+      "--assignment",
+      left.assignmentId,
+    ]);
+    expect(focused.data.assignmentId).toBe(left.assignmentId);
     await ok(
       root,
       [
-        "work",
+        "recover",
         "checkpoint",
-        "delivery:e2e",
-        "left",
-        "--actor",
-        "ai:implementation",
+        "--assignment",
+        left.assignmentId,
         "--input",
         "-",
       ],
       JSON.stringify({
-        summary: "Core implementation is type-safe.",
-        progress: 70,
-        artifacts: ["tests/integration"],
+        summary: "Left is verified.",
+        progress: 80,
+        artifacts: ["left evidence"],
       }),
     );
-    let delivery = (
-      await ok(root, ["run", "show", "delivery:e2e"])
-    ).data;
-    expect(node(delivery, "left").checkpoint.progress).toBe(70);
-    record(
-      steps,
-      "UP01-05",
-      "Checkpoint through JSON stdin",
-      "A fresh CLI process reads the durable checkpoint.",
-    );
 
-    await ok(
+    const afterLeft = await ok(
       root,
-      [
-        "work",
-        "complete",
-        "delivery:e2e",
-        "left",
-        "--actor",
-        "ai:implementation",
-        "--input",
-        "-",
-      ],
+      ["done", "--assignment", left.assignmentId, "--input", "-"],
       JSON.stringify({
-        summary: "Core implementation verified.",
-        output: { checks: ["typecheck", "CLI integration"] },
-        evidence: ["tests/integration/service.test.ts"],
+        summary: "Left complete.",
+        evidence: ["left evidence"],
       }),
     );
-    await ok(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "third",
-      "--actor",
-      "ai:review",
-      "--lease",
-      "300",
-    ]);
-    await ok(
-      root,
-      [
-        "work",
-        "complete",
-        "delivery:e2e",
-        "right",
-        "--actor",
-        "ai:verification",
-        "--input",
-        "-",
-      ],
-      JSON.stringify({ summary: "Public behavior verified.", evidence: [] }),
-    );
-    delivery = (await ok(root, ["run", "show", "delivery:e2e"])).data;
-    expect(node(delivery, "join").status).toBe("pending");
-    await ok(
-      root,
-      [
-        "work",
-        "complete",
-        "delivery:e2e",
-        "third",
-        "--actor",
-        "ai:review",
-        "--input",
-        "-",
-      ],
-      JSON.stringify({ summary: "Boundaries reviewed.", evidence: [] }),
-    );
-    delivery = (await ok(root, ["run", "show", "delivery:e2e"])).data;
-    expect(node(delivery, "join").status).toBe("done");
-    expect(node(delivery, "decision").status).toBe("ready");
-    record(
-      steps,
-      "UP01-06",
-      "Complete all activated branches",
-      "Join waits for the last branch, then auto-completes and opens Decision exactly once.",
-    );
+    expect(afterLeft.data.assignments.map((item: any) => item.node.id).sort())
+      .toEqual(["right", "work"]);
 
-    const decision = await ok(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "decision",
-      "--actor",
-      "ai:quality",
-      "--lease",
-      "300",
-    ]);
-    expect(decision.data.node.routes).toEqual([
+    const afterDraft = await ok(
+      root,
+      ["done", "--assignment", firstWork.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "Draft ready.",
+        evidence: ["draft evidence"],
+      }),
+    );
+    const firstReview = assignment(afterDraft, "guarded-loop", "decide");
+    expect(firstReview.node.routes).toEqual([
       {
         route: "pass",
         to: "end",
-        label: "all checks pass",
+        label: "accepted",
         remainingTraversals: null,
       },
       {
         route: "repair",
-        to: "left",
-        label: "repair core",
+        to: "work",
+        label: "repair required",
         remainingTraversals: 2,
       },
     ]);
-    await ok(
+
+    const afterRepair = await ok(
       root,
-      [
-        "work",
-        "complete",
-        "delivery:e2e",
-        "decision",
-        "--actor",
-        "ai:quality",
-        "--input",
-        "-",
-      ],
+      ["done", "--assignment", firstReview.assignmentId, "--input", "-"],
       JSON.stringify({
-        summary: "One repair is required.",
+        summary: "Repair required.",
         route: "repair",
-        evidence: ["quality finding"],
+        evidence: ["review finding"],
       }),
     );
-    delivery = (await ok(root, ["run", "show", "delivery:e2e"])).data;
-    expect(node(delivery, "left").status).toBe("ready");
-    expect(node(delivery, "left").attempt).toBe(1);
-    expect(
-      delivery.edges.find((edge: any) => edge.route === "repair").traversals,
-    ).toBe(1);
-    record(
-      steps,
-      "UP01-07",
-      "Return Decision route repair",
-      "Only the bounded repair region reopens and prior Attempt remains visible.",
+    const secondWork = assignment(afterRepair, "guarded-loop", "work");
+    expect(secondWork.node.attempt).toBe(2);
+    expect(secondWork.context.predecessors).toContainEqual(
+      expect.objectContaining({
+        nodeId: "decide",
+        attempt: 1,
+        route: "repair",
+        summary: "Repair required.",
+        evidence: ["review finding"],
+      }),
     );
 
-    const repaired = await ok(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "left",
-      "--actor",
-      "ai:implementation",
-      "--lease",
-      "300",
-    ]);
-    expect(repaired.data.node.attempt).toBe(2);
-    expect(
-      repaired.data.context.predecessors.find(
-        (predecessor: any) => predecessor.nodeId === "decision",
-      ),
-    ).toMatchObject({
-      status: "pending",
-      attempt: 1,
-      route: "repair",
-      summary: "One repair is required.",
-      evidence: ["quality finding"],
-    });
-    await ok(
+    const afterSecondWork = await ok(
       root,
-      [
-        "work",
-        "complete",
-        "delivery:e2e",
-        "left",
-        "--actor",
-        "ai:implementation",
-        "--input",
-        "-",
-      ],
+      ["done", "--assignment", secondWork.assignmentId, "--input", "-"],
       JSON.stringify({
         summary: "Repair verified.",
-        output: { checks: ["typecheck", "CLI integration", "repair regression"] },
         evidence: ["repair evidence"],
       }),
     );
-    await ok(root, [
-      "work",
-      "claim",
-      "delivery:e2e",
-      "decision",
-      "--actor",
-      "ai:quality",
-      "--lease",
-      "300",
-    ]);
+    const secondReview = assignment(
+      afterSecondWork,
+      "guarded-loop",
+      "decide",
+    );
+    expect(secondReview.node.attempt).toBe(2);
+
     await ok(
       root,
-      [
-        "work",
-        "complete",
-        "delivery:e2e",
-        "decision",
-        "--actor",
-        "ai:quality",
-        "--input",
-        "-",
-      ],
+      ["done", "--assignment", secondReview.assignmentId, "--input", "-"],
       JSON.stringify({
-        summary: "All gates pass.",
+        summary: "Accepted.",
         route: "pass",
-        evidence: ["final quality evidence"],
+        evidence: ["acceptance evidence"],
       }),
     );
-    delivery = (await ok(root, ["run", "show", "delivery:e2e"])).data;
-    expect(delivery.summary.status).toBe("completed");
-    expect(node(delivery, "end").status).toBe("done");
-    expect(node(delivery, "left").attempt).toBe(2);
-    record(
-      steps,
-      "UP01-08",
-      "Repair and return Decision route pass",
-      "Next reaches End and the graph becomes completed after two preserved Attempts.",
+    const completed = await ok(
+      root,
+      ["done", "--assignment", right.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "Right complete.",
+        evidence: ["right evidence"],
+      }),
     );
+    expect(completed.data.state).toBe("completed");
+    expect(completed.data.assignments).toEqual([]);
 
-    for (const [nodeId, actor] of [
-      ["left", "ai:research-left"],
-      ["right", "ai:research-right"],
-    ] as const) {
-      await ok(
-        root,
-        [
-          "work",
-          "complete",
-          "research:e2e",
-          nodeId,
-          "--actor",
-          actor,
-          "--input",
-          "-",
-        ],
-        JSON.stringify({
-          summary: `Research ${nodeId} completed.`,
-          evidence: [],
-        }),
-      );
-    }
-    const finalRuns = await ok(root, ["run", "list"]);
-    expect(finalRuns.data).toHaveLength(2);
-    expect(finalRuns.data.every((run: any) => run.status === "completed")).toBe(
-      true,
+    const replay = await ok(
+      root,
+      ["done", "--assignment", right.assignmentId, "--input", "-"],
+      JSON.stringify({
+        evidence: ["right evidence"],
+        summary: "Right complete.",
+      }),
     );
-    const noWork = await ok(root, ["work", "ready", "--all"]);
-    expect(noWork.data).toEqual([]);
-    record(
-      steps,
-      "UP02-03",
-      "Finish the second graph independently",
-      "Both runs complete with no Ready work and no cross-graph state leakage.",
+    expect(replay.data.replayed).toBe(true);
+    const conflict = await fail(
+      root,
+      ["done", "--assignment", right.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "Conflicting replay.",
+        evidence: [],
+      }),
     );
+    expect(conflict.error.code).toBe("ASSIGNMENT_INPUT_CONFLICT");
 
-    const events = await ok(root, ["events", "list", "--after", "0"]);
-    expect(events.data.length).toBeGreaterThan(15);
+    const overview = await ok(root, [
+      "inspect",
+      "overview",
+      "--run-status",
+      "completed",
+    ]);
+    expect(overview.data.runs).toHaveLength(2);
     expect(
-      events.data.every(
-        (event: any, index: number, all: any[]) =>
-          index === 0 || event.sequence > all[index - 1].sequence,
-      ),
+      overview.data.runs.every((summary: any) => summary.status === "completed"),
     ).toBe(true);
-    const persistedGraph = JSON.parse(
-      readFileSync(
-        path.join(root, ".burn-graph", "graphs", "delivery.json"),
-        "utf8",
-      ),
-    );
-    expect(persistedGraph.revision).toBe(1);
-    record(
-      steps,
-      "UP01-09",
-      "Inspect history after many process restarts",
-      "Events remain globally ordered and the authored GraphSpec remains inspectable JSON.",
-    );
+    const loopSnapshot = await ok(root, [
+      "inspect",
+      "run",
+      "guarded-loop:e2e",
+    ]);
+    expect(loopSnapshot.data.summary.status).toBe("completed");
+    const loopNode = await ok(root, [
+      "inspect",
+      "node",
+      "guarded-loop:e2e",
+      "work",
+    ]);
+    expect(loopNode.data.attempts).toHaveLength(2);
+    const mermaid = await ok(root, [
+      "inspect",
+      "mermaid",
+      "guarded-loop:e2e",
+    ]);
+    expect(mermaid.data.source).toContain("flowchart LR");
+    expect(mermaid.data.source).toContain("1/2");
+    const events = await ok(root, ["inspect", "events", "--after", "0"]);
+    expect(events.data.length).toBeGreaterThan(10);
+    expect((await ok(root, ["inspect", "ready"])).data).toEqual([]);
+  });
 
-    expect(cliProcessCount).toBeGreaterThan(25);
-    writeEvidence(startedAt, steps, cliProcessCount);
+  test("uses Assignment handles for recovery and named Viewer lifecycle", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    await ok(root, ["init"]);
+    const graphFile = writeGraph(
+      root,
+      "recovery",
+      parallelGraph("guarded-recovery"),
+    );
+    await ok(root, ["graph", "apply", "--input", graphFile]);
+    const started = await ok(root, [
+      "run",
+      "start",
+      "guarded-recovery",
+      "--actor",
+      "primary",
+      "--run-id",
+      "guarded-recovery:e2e",
+    ]);
+    const left = assignment(started, "guarded-recovery", "left");
+    const right = assignment(started, "guarded-recovery", "right");
+
+    const heartbeat = await ok(root, [
+      "recover",
+      "heartbeat",
+      "--assignment",
+      left.assignmentId,
+    ]);
+    expect(heartbeat.data.assignmentId).toBe(left.assignmentId);
+    const blocked = await ok(root, [
+      "recover",
+      "block",
+      "--assignment",
+      left.assignmentId,
+      "--reason",
+      "External decision required.",
+    ]);
+    expect(blocked.data.blocked.status).toBe("blocked");
+
+    const unblocked = await ok(root, [
+      "recover",
+      "unblock",
+      "--assignment",
+      left.assignmentId,
+    ]);
+    const secondLeft = assignment(unblocked, "guarded-recovery", "left");
+    expect(secondLeft.node.attempt).toBe(2);
+
+    const released = await ok(root, [
+      "recover",
+      "release",
+      "--assignment",
+      right.assignmentId,
+      "--reason",
+      "Move to another execution slot.",
+    ]);
+    const secondRight = assignment(released, "guarded-recovery", "right");
+    expect(secondRight.node.attempt).toBe(2);
+    const retried = await ok(root, [
+      "recover",
+      "fail",
+      "--assignment",
+      secondRight.assignmentId,
+      "--reason",
+      "Transient failure.",
+      "--retry",
+    ]);
+    const thirdRight = assignment(retried, "guarded-recovery", "right");
+    expect(thirdRight.node.attempt).toBe(3);
+    expect((await ok(root, ["recover", "reconcile"])).data.reconciled).toBe(0);
+
+    const probe = Bun.serve({ port: 0, fetch: () => new Response("probe") });
+    const port = probe.port;
+    const secondProbe = Bun.serve({
+      port: 0,
+      fetch: () => new Response("probe"),
+    });
+    const secondPort = secondProbe.port;
+    probe.stop(true);
+    secondProbe.stop(true);
+    let primaryRunning = false;
+    let secondaryRunning = false;
+    try {
+      const viewer = await ok(root, [
+        "viewer",
+        "start",
+        "e2e",
+        "--port",
+        String(port),
+      ]);
+      primaryRunning = true;
+      const secondary = await ok(root, [
+        "viewer",
+        "start",
+        "e2e-secondary",
+        "--port",
+        String(secondPort),
+      ]);
+      secondaryRunning = true;
+      expect(viewer.data).toMatchObject({
+        name: "e2e",
+        port,
+        running: true,
+        healthy: true,
+      });
+      expect(viewer.data).not.toHaveProperty("instanceToken");
+      expect(viewer.data).not.toHaveProperty("entryFile");
+      expect((await fetch(`${viewer.data.url}/api/health`)).ok).toBe(true);
+      expect(secondary.data).toMatchObject({
+        name: "e2e-secondary",
+        running: true,
+        healthy: true,
+      });
+      const status = await ok(root, ["viewer", "status", "e2e"]);
+      expect(status.data).toMatchObject({ running: true, healthy: true });
+      expect(status.data).not.toHaveProperty("instanceToken");
+      const stopped = await ok(root, ["viewer", "stop", "e2e"]);
+      primaryRunning = false;
+      expect(stopped.data.stopped).toBe(true);
+      expect(
+        (await ok(root, ["viewer", "status", "e2e-secondary"])).data,
+      ).toMatchObject({ running: true, healthy: true });
+    } finally {
+      if (primaryRunning) {
+        await invoke(root, ["viewer", "stop", "e2e"]);
+      }
+      if (secondaryRunning) {
+        await invoke(root, ["viewer", "stop", "e2e-secondary"]);
+      }
+    }
   });
 });

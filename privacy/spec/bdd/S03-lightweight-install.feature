@@ -7,7 +7,7 @@ Feature: Lightweight burn-graph installation
     Then it declares zero package dependencies
     And the burn-graph command reports its version with exit code zero
     And the source package manifest and lockfile remain unchanged
-    And separate installed CLI processes can claim parallel nodes
+    And separate installed CLI processes schedule parallel Assignments safely
     And the installed Viewer serves packaged assets through read-only routes
 
   Scenario: Product data remains project-local

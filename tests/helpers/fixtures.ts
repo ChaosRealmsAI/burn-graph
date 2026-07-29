@@ -101,6 +101,60 @@ export function parallelGraph(id = "parallel"): GraphSpec {
   };
 }
 
+export function wideGraph(id = "wide", taskCount = 50): GraphSpec {
+  const tasks: NodeSpec[] = Array.from({ length: taskCount }, (_, index) => ({
+    id: `task-${index}`,
+    type: "task",
+    title: `Task ${index}`,
+    prompt: prompt(`Complete task ${index}.`),
+    next: [{ to: "join" }],
+    maxAttempts: 3,
+    actorHint: null,
+    tags: [],
+  }));
+  return {
+    schemaVersion: 1,
+    id,
+    title: "Wide parallel convergence",
+    goal: "Schedule many parallel tasks within bounded runtime limits.",
+    revision: 1,
+    maxActive: 32,
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        title: "Start",
+        prompt: prompt(""),
+        next: tasks.map((task) => ({ to: task.id })),
+        maxAttempts: 3,
+        actorHint: null,
+        tags: [],
+      },
+      ...tasks,
+      {
+        id: "join",
+        type: "join",
+        title: "Join",
+        prompt: prompt(""),
+        next: [{ to: "end" }],
+        maxAttempts: 3,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "end",
+        type: "end",
+        title: "End",
+        prompt: prompt(""),
+        next: [],
+        maxAttempts: 3,
+        actorHint: null,
+        tags: [],
+      },
+    ],
+  };
+}
+
 export function loopGraph(id = "repair-loop"): GraphSpec {
   return {
     schemaVersion: 1,

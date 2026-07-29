@@ -1,54 +1,55 @@
 # CLI contract
 
-burn-graph prints one compact JSON envelope per bounded command:
+Every bounded command prints one JSON envelope. Help, version, success, and
+failure use the same top-level shape:
 
 ```json
 {
+  "schemaVersion": 1,
   "ok": true,
-  "command": "work.claim",
-  "revision": 2,
-  "event": {},
-  "data": {}
+  "command": "next",
+  "data": {},
+  "changes": [],
+  "nextActions": []
 }
 ```
 
-Failures use exit code `1` and a stable `error.code`, `retryable`, and
-structured `details`. Argument values are never copied into the `command`
-label. `mermaid` emits Mermaid source and `events follow` emits JSON Lines.
-
-Global options precede the command:
+Failures exit `1` with stable `error.code`, `retryable`, `details`, and exact
+`recoveryActions`. `inspect events --follow` is the only streaming command and
+emits one envelope per JSONL line. Global options precede the command:
 
 ```bash
-burn-graph --root path/to/project --pretty run list
+burn-graph --root path/to/project --pretty inspect overview
 ```
 
-## AI loop
+## Guarded AI loop
 
 ```bash
-# See every eligible Task and Decision across all active Graphs.
-burn-graph work ready --all
+burn-graph init
+burn-graph graph apply --input graph.json
+burn-graph run start delivery --actor primary
 
-# Start one node atomically and receive its prompt contract.
-burn-graph work claim delivery implement --actor primary --lease 900
-
-# Recover the Actor's focused and other claimed work after interruption.
-burn-graph work current --actor primary
-
-# Persist bounded progress without ending the node.
-printf '%s' '{"summary":"Tests added","progress":70,"artifacts":["tests/"]}' |
-  burn-graph work checkpoint delivery implement --actor primary --input -
-
-# End the node. burn-graph resolves and activates structural Next.
+# Execute every returned AssignmentPacket prompt.
 printf '%s' '{"summary":"Verified","evidence":["tests/"]}' |
-  burn-graph work complete delivery implement --actor primary --input -
+  burn-graph done --assignment <assignment-id> --input -
+
+# Recover complete packets after interruption or fill empty Actor slots.
+burn-graph current --actor primary
+burn-graph next --actor primary
 ```
 
-Claim is the node start boundary and the prompt-injection boundary. The
-calling AI performs the task with its own tools; burn-graph never executes the
-instructions. Complete is the node end boundary. Task fan-out, Join, Decision,
-Skip, bounded repair, and End are deterministic runtime transitions.
+`run start`, `run resume`, `next`, and `done` return zero or more complete
+Assignment packets. Each packet contains an opaque `assignmentId`, Graph and
+node identity, Attempt, prompt contract, direct predecessor context, legal
+Decision routes, lease, and exact return commands. The AI executes the prompt;
+burn-graph never executes it.
 
-Decision completion adds one declared route:
+`done` is idempotent for the same Assignment ID and byte-equivalent JSON input.
+A different result for an already completed Assignment returns
+`ASSIGNMENT_INPUT_CONFLICT`. Structural Start, Join, Skip, bounded repair, and
+End transitions are automatic.
+
+Decision completion includes one declared route:
 
 ```json
 {
@@ -58,28 +59,56 @@ Decision completion adds one declared route:
 }
 ```
 
-A reopened repair assignment includes the prior Decision Attempt, route,
-summary, and evidence so the AI knows why it returned.
+A reopened Task gets a new Assignment ID and Attempt number plus the prior
+Decision route, summary, and evidence.
 
-## Commands
+## Public commands
 
 | Area | Commands |
 |---|---|
-| Project | `init`, `doctor` |
+| Project | `init`, `doctor`, `help` |
 | GraphSpec | `graph validate`, `graph apply`, `graph list`, `graph show`, `graph clone` |
-| Run | `run start`, `run list`, `run show`, `run pause`, `run resume`, `run cancel` |
-| Work | `work ready`, `work claim`, `work current`, `work focus`, `work heartbeat`, `work checkpoint`, `work complete` |
-| Recovery | `work block`, `work unblock`, `work release`, `work fail --retry`, `work reconcile` |
-| Observation | `events list`, `events follow`, `mermaid`, `serve` |
+| Run lifecycle | `run start`, `run pause`, `run resume`, `run cancel` |
+| Normal loop | `next`, `current`, `focus`, `done` |
+| Inspection | `inspect overview`, `inspect run`, `inspect node`, `inspect ready`, `inspect mermaid`, `inspect events` |
+| Recovery | `recover heartbeat`, `recover checkpoint`, `recover block`, `recover unblock`, `recover release`, `recover fail`, `recover reconcile` |
+| Human Viewer | `viewer start`, `viewer status`, `viewer stop` |
 
-`work ready --all` spans active Graphs. Each Graph enforces its own
-`maxActive`; a Claim beyond that limit is a retryable conflict. Claim uses a
-SQLite `BEGIN IMMEDIATE` transaction, so two processes racing for one node
-produce exactly one winner.
+The Runtime chooses nodes. There is no public command that directly claims a
+named Ready node. Scheduling is transactional, respects each Graph's
+`maxActive`, caps one Actor at eight live Assignments, ranks matching
+`actorHint` first, and rotates deterministically across Runs. Concurrent `next`
+calls cannot create duplicate live Assignments.
 
-Pause prevents new Claims in that Run but lets an already Running Actor report
-its result. Lease expiry preserves the old Attempt and can be recovered
-opportunistically by a new Claim or explicitly with `work reconcile`.
+Normal-loop responses are bounded: at most eight complete Assignment packets,
+eight relevant Run summaries, and 32 Ready preview rows. `activeRunCount` and
+`remainingReadyCount` preserve the full queue totals; deeper history belongs
+under `inspect`.
+
+Pause prevents new scheduling in that Run while existing Assignment handles
+remain reportable. Lease expiry preserves the Attempt; `next` reconciles it
+automatically, and `recover reconcile [run-or-graph]` exposes the exceptional
+path explicitly.
+
+## Progressive Help
+
+```bash
+burn-graph --help
+burn-graph graph --help
+burn-graph done --help
+burn-graph help ai-loop
+burn-graph help graph-spec
+burn-graph help inspect
+burn-graph help recover
+burn-graph help errors
+```
+
+Root Help returns only command groups, quick start, and links to deeper Help.
+Area and leaf Help disclose arguments, options, mutation behavior, input,
+output, errors, and next commands. Argument failures retain the recognized
+command label and point to that command's leaf Help. Removed legacy commands
+fail as invalid arguments: `work`, top-level `events`, top-level `mermaid`,
+`serve`, `run list`, and `run show`.
 
 ## Local state
 
@@ -87,9 +116,8 @@ opportunistically by a new Claim or explicitly with `work reconcile`.
 .burn-graph/
 ├── config.json
 ├── graphs/          # normalized, versionable GraphSpecs
-└── runtime/         # ignored SQLite, WAL, and runtime artifacts
+└── runtime/         # ignored SQLite, WAL, Viewer records, and logs
 ```
 
-Every Run pins a GraphSpec revision in SQLite. Editing a JSON file does not
-change runtime state; `graph apply` validates and registers a strictly newer
-revision.
+Every Run pins an immutable GraphSpec revision. Editing JSON does not mutate a
+Run; `graph apply` validates and registers a strictly newer revision.

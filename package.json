@@ -1,6 +1,6 @@
 {
   "name": "burn-graph",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.2.17",
@@ -22,9 +22,9 @@
     "release:pack": "bun run build:cli && bun run build:viewer && bun scripts/build/package.ts",
     "install:local": "bun run release:pack && bun scripts/install/local.ts",
     "preview": "bun --bun vite --config apps/product-preview/vite.config.ts --host 127.0.0.1",
-    "viewer:start": "bun scripts/runtime/viewer.ts start",
-    "viewer:status": "bun scripts/runtime/viewer.ts status",
-    "viewer:stop": "bun scripts/runtime/viewer.ts stop",
+    "viewer:start": "bun apps/cli/src/index.ts viewer start",
+    "viewer:status": "bun apps/cli/src/index.ts viewer status",
+    "viewer:stop": "bun apps/cli/src/index.ts viewer stop",
     "e2e": "bun run release:pack && bun test tests/e2e",
     "verify": "bun run check && bun run test && bun run build && bun run e2e"
   },

@@ -27,7 +27,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.1.tgz",
+  "burn-graph-0.1.0-dev.2.tgz",
 );
 const roots: string[] = [];
 
@@ -186,7 +186,12 @@ describe("lightweight Bun package", () => {
       env: installEnvironment,
     });
     expect(version.exitCode, version.stderr).toBe(0);
-    expect(version.stdout.trim()).toBe("0.1.0-dev.1");
+    expect(JSON.parse(version.stdout)).toMatchObject({
+      schemaVersion: 1,
+      ok: true,
+      command: "version",
+      data: { version: "0.1.0-dev.2" },
+    });
 
     const installedPackage = path.join(
       installPrefix,
@@ -214,37 +219,26 @@ describe("lightweight Bun package", () => {
       "--input",
       graphFile,
     ]);
-    await installedCli(executable, projectRoot, [
+    const started = await installedCli(executable, projectRoot, [
       "run",
       "start",
       "installed-smoke",
+      "--actor",
+      "installed",
       "--run-id",
       "installed:smoke",
     ]);
-
-    const [left, right] = await Promise.all([
-      installedCli(executable, projectRoot, [
-        "work",
-        "claim",
-        "installed:smoke",
-        "left",
-        "--actor",
-        "installed:left",
-      ]),
-      installedCli(executable, projectRoot, [
-        "work",
-        "claim",
-        "installed:smoke",
-        "right",
-        "--actor",
-        "installed:right",
-      ]),
-    ]);
-    expect(left.data.node.id).toBe("left");
-    expect(right.data.node.id).toBe("right");
+    const left = started.data.assignments.find(
+      (assignment: any) => assignment.node.id === "left",
+    );
+    const right = started.data.assignments.find(
+      (assignment: any) => assignment.node.id === "right",
+    );
+    expect(left.node.prompt.objective).toBe("Complete the left branch.");
+    expect(right.node.prompt.objective).toBe("Complete the right branch.");
     const overlapping = await installedCli(executable, projectRoot, [
+      "inspect",
       "run",
-      "show",
       "installed:smoke",
     ]);
     expect(overlapping.data.summary.counts.running).toBe(2);
@@ -254,12 +248,9 @@ describe("lightweight Bun package", () => {
         executable,
         projectRoot,
         [
-          "work",
-          "complete",
-          "installed:smoke",
-          "left",
-          "--actor",
-          "installed:left",
+          "done",
+          "--assignment",
+          left.assignmentId,
           "--input",
           "-",
         ],
@@ -269,12 +260,9 @@ describe("lightweight Bun package", () => {
         executable,
         projectRoot,
         [
-          "work",
-          "complete",
-          "installed:smoke",
-          "right",
-          "--actor",
-          "installed:right",
+          "done",
+          "--assignment",
+          right.assignmentId,
           "--input",
           "-",
         ],
@@ -282,8 +270,8 @@ describe("lightweight Bun package", () => {
       ),
     ]);
     const completed = await installedCli(executable, projectRoot, [
+      "inspect",
       "run",
-      "show",
       "installed:smoke",
     ]);
     expect(completed.data.summary.status).toBe("completed");
@@ -295,49 +283,41 @@ describe("lightweight Bun package", () => {
     });
     const viewerPort = probe.port;
     probe.stop(true);
-    const viewer = Bun.spawn(
-      [
-        executable,
-        "--root",
-        projectRoot,
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(viewerPort),
-      ],
-      {
-        cwd: projectRoot,
-        env: installEnvironment,
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
+    const viewer = await installedCli(executable, projectRoot, [
+      "viewer",
+      "start",
+      "installed",
+      "--port",
+      String(viewerPort),
+    ]);
     try {
-      let healthy = false;
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        try {
-          const response = await fetch(
-            `http://127.0.0.1:${viewerPort}/api/health`,
-          );
-          if (response.ok) {
-            healthy = true;
-            break;
-          }
-        } catch {
-          // The installed process may still be binding its loopback port.
-        }
-        await Bun.sleep(50);
-      }
-      expect(healthy).toBe(true);
+      expect(viewer.data).toMatchObject({
+        name: "installed",
+        running: true,
+        healthy: true,
+      });
+      expect(viewer.data).not.toHaveProperty("instanceToken");
+      expect(viewer.data).not.toHaveProperty("entryFile");
+      expect(
+        (
+          await installedCli(executable, projectRoot, [
+            "viewer",
+            "status",
+            "installed",
+          ])
+        ).data,
+      ).toMatchObject({ running: true, healthy: true });
       const mutation = await fetch(
         `http://127.0.0.1:${viewerPort}/api/snapshot`,
         { method: "POST" },
       );
       expect(mutation.status).toBe(405);
     } finally {
-      viewer.kill("SIGTERM");
-      await viewer.exited;
+      await installedCli(executable, projectRoot, [
+        "viewer",
+        "stop",
+        "installed",
+      ]);
     }
 
     const evidenceRoot = path.join(

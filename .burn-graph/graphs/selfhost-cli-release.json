@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-cli-release",
+  "title": "Verify the lightweight CLI release",
+  "goal": "Prove the packaged CLI and named Viewer work outside the source tree while the convergence Graph runs in parallel.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start release proof",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "install-proof"
+        },
+        {
+          "to": "viewer-proof"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "install-proof",
+      "type": "task",
+      "title": "Verify isolated installation",
+      "prompt": {
+        "objective": "Build, install, and run the zero-dependency release archive in an isolated Bun prefix.",
+        "instructions": [
+          "Operate an unrelated temporary project with the installed executable.",
+          "Confirm source manifests remain unchanged."
+        ],
+        "mustRead": [
+          "docs/install.md",
+          "tests/e2e/install-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "The install E2E passes.",
+          "The archive stays under 2 MB with zero package dependencies.",
+          "The installed CLI returns JSON Help and Assignments."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "install",
+        "release"
+      ]
+    },
+    {
+      "id": "viewer-proof",
+      "type": "task",
+      "title": "Verify named Viewer lifecycle",
+      "prompt": {
+        "objective": "Start, inspect, and stop an exact named packaged Viewer while proving HTTP remains read-only.",
+        "instructions": [
+          "Use a bounded loopback port and recorded instance name.",
+          "Do not stop processes by a broad name."
+        ],
+        "mustRead": [
+          "apps/cli/src/viewer-runtime.ts",
+          "privacy/spec/bdd/S02-live-viewer.feature"
+        ],
+        "doneWhen": [
+          "Start and status report healthy.",
+          "A mutation request returns 405.",
+          "Stop terminates only the recorded PID."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "viewer",
+        "runtime"
+      ]
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "title": "Converge release evidence",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Release proof complete",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

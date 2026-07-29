@@ -183,6 +183,7 @@ export interface ProjectConfig {
   readonly projectId: string;
   readonly createdAt: string;
   readonly defaultLeaseSeconds: number;
+  readonly maxAssignmentsPerActor: number;
 }
 
 export interface RuntimeNode {
@@ -191,6 +192,7 @@ export interface RuntimeNode {
   readonly title: string;
   readonly status: NodeStatus;
   readonly attempt: number;
+  readonly assignmentId: string | null;
   readonly actorId: string | null;
   readonly leaseExpiresAt: string | null;
   readonly route: string | null;
@@ -261,6 +263,7 @@ export interface GraphSnapshot {
 
 export interface AssignmentPacket {
   readonly schemaVersion: 1;
+  readonly assignmentId: string;
   readonly projectId: string;
   readonly graph: {
     readonly runId: string;
@@ -318,9 +321,48 @@ export interface ActorWork {
     readonly runId: string;
     readonly graphId: string;
     readonly nodeId: string;
+    readonly assignmentId: string;
     readonly title: string;
     readonly leaseExpiresAt: string;
   }[];
+}
+
+export interface RuntimeChange {
+  readonly revision: number;
+  readonly event: GraphEvent;
+}
+
+export interface ReadyWork {
+  readonly runId: string;
+  readonly graphId: string;
+  readonly nodeId: string;
+  readonly type: "task" | "decision";
+  readonly title: string;
+  readonly actorHint: string | null;
+  readonly attempt: number;
+  readonly updatedAt: string;
+}
+
+export interface WorkSchedule {
+  readonly actorId: string;
+  readonly state: "assigned" | "waiting" | "completed" | "blocked";
+  readonly assignments: readonly AssignmentPacket[];
+  readonly remainingReady: readonly ReadyWork[];
+  readonly remainingReadyCount: number;
+  readonly activeRunCount: number;
+  readonly runs: readonly GraphSummary[];
+  readonly changes: readonly RuntimeChange[];
+}
+
+export interface CompletionContinuation extends WorkSchedule {
+  readonly completed: {
+    readonly assignmentId: string;
+    readonly runId: string;
+    readonly nodeId: string;
+    readonly attempt: number;
+    readonly result: CompletionInput;
+  };
+  readonly replayed: boolean;
 }
 
 export interface MutationResult<T> {

@@ -7,12 +7,12 @@ description: AI-first local prompt graph control plane with a read-only live Mer
 
 ## Product boundary
 
-- burn-graph owns project-local graph definitions, graph-run state, claims,
-  transitions, evidence references, event history, Mermaid projection, and the
-  local read-only viewer.
+- burn-graph owns project-local graph definitions, graph-run state,
+  Assignments, transitions, evidence references, event history, Mermaid
+  projection, and the local read-only Viewer.
 - burn-graph never launches a model, dispatches a subagent, executes a task,
-  runs a verifier, or interprets task output. AI callers use the CLI to claim
-  work and report outcomes.
+  runs a verifier, or interprets task output. AI callers use the CLI to receive
+  guarded prompt Assignments and report outcomes.
 - Graph specifications are JSON. Runtime state is SQLite. The CLI is the only
   supported write surface.
 - Existing sibling projects in the parent workspace are not dependencies and
@@ -39,7 +39,8 @@ description: AI-first local prompt graph control plane with a read-only live Mer
 - Unit and integration tests: `bun run test`
 - Build all artifacts: `bun run build`
 - Full verification: `bun run verify`
-- Development CLI: `bun run burn-graph -- --help`
+- Development CLI Help: `bun run burn-graph -- --help`
+- Development AI loop: `bun run burn-graph -- next --actor <actor>`
 - Product Preview: `bun run preview`
 - Start named Viewer: `bun run viewer:start -- <name> <project-root> [port]`
 - Viewer status: `bun run viewer:status -- <name>`
@@ -58,4 +59,6 @@ project roots, and ports. Runtime scripts release only their recorded PID.
 - Do not embed prompts, task results, credentials, or absolute user paths in
   shareable logs or committed Evidence.
 - Every state mutation is transactional and emits exactly one durable event.
+- Public write commands use opaque Assignment IDs; callers never select a
+  Ready node directly.
 - The Viewer remains read-only; no browser request may mutate graph state.

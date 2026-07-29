@@ -12,6 +12,7 @@ import {
   parallelGraph,
   removeTestProject,
   schemaGraph,
+  wideGraph,
 } from "../helpers/fixtures.ts";
 
 function status(snapshot: GraphSnapshot, nodeId: string): string {
@@ -345,6 +346,284 @@ describe("runtime convergence", () => {
         attempt: 1,
         actorId: "stale-actor",
       });
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("starts with complete Assignments and automatically refills parallel work", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(parallelGraph("guarded-parallel"));
+      const started = service.startWithAssignments(
+        "guarded-parallel",
+        "primary",
+        "guarded-parallel:run",
+      );
+
+      expect(started.state).toBe("assigned");
+      expect(started.assignments.map((assignment) => assignment.node.id).sort())
+        .toEqual(["left", "right"]);
+      expect(
+        started.assignments.every(
+          (assignment) =>
+            assignment.assignmentId.length > 0 &&
+            assignment.returnProtocol.complete.includes(
+              `done --assignment ${assignment.assignmentId}`,
+            ),
+        ),
+      ).toBe(true);
+
+      const left = started.assignments.find(
+        (assignment) => assignment.node.id === "left",
+      )!;
+      const afterLeft = service.completeAndContinue(left.assignmentId, {
+        summary: "Left complete.",
+        evidence: ["left evidence"],
+      });
+      expect(afterLeft.replayed).toBe(false);
+      expect(afterLeft.assignments.map((assignment) => assignment.node.id))
+        .toEqual(["right"]);
+
+      const right = afterLeft.assignments[0]!;
+      const completed = service.completeAndContinue(right.assignmentId, {
+        summary: "Right complete.",
+        evidence: ["right evidence"],
+      });
+      expect(completed.state).toBe("completed");
+      expect(completed.assignments).toEqual([]);
+      expect(service.getSnapshot("guarded-parallel:run").summary.status).toBe(
+        "completed",
+      );
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("makes Done idempotent and rejects conflicting replay input", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(parallelGraph("idempotent-done"));
+      const started = service.startWithAssignments(
+        "idempotent-done",
+        "primary",
+        "idempotent-done:run",
+      );
+      const assignment = started.assignments.find(
+        (candidate) => candidate.node.id === "left",
+      )!;
+      const input = {
+        summary: "Stable completion.",
+        evidence: ["stable evidence"],
+      };
+
+      service.completeAndContinue(assignment.assignmentId, input);
+      const replay = service.completeAndContinue(assignment.assignmentId, input);
+      expect(replay.replayed).toBe(true);
+      expect(
+        service
+          .getSnapshot("idempotent-done:run")
+          .events.filter(
+            (event) =>
+              event.type === "node.completed" && event.nodeId === "left",
+          ),
+      ).toHaveLength(1);
+
+      try {
+        service.completeAndContinue(assignment.assignmentId, {
+          summary: "Different completion.",
+          evidence: [],
+        });
+        throw new Error("Expected ASSIGNMENT_INPUT_CONFLICT");
+      } catch (error) {
+        expect(error).toBeInstanceOf(BurnGraphError);
+        expect((error as BurnGraphError).code).toBe(
+          "ASSIGNMENT_INPUT_CONFLICT",
+        );
+      }
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("automatically carries Decision repair context into the next Attempt", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(loopGraph("guarded-loop"));
+      const started = service.startWithAssignments(
+        "guarded-loop",
+        "primary",
+        "guarded-loop:run",
+      );
+      const work = started.assignments[0]!;
+      const reviewSchedule = service.completeAndContinue(work.assignmentId, {
+        summary: "Draft ready.",
+        evidence: ["draft evidence"],
+      });
+      const review = reviewSchedule.assignments[0]!;
+      expect(review.node.id).toBe("decide");
+
+      const repairSchedule = service.completeAndContinue(review.assignmentId, {
+        summary: "Repair the draft.",
+        route: "repair",
+        evidence: ["review finding"],
+      });
+      const repairedWork = repairSchedule.assignments[0]!;
+      expect(repairedWork.node.id).toBe("work");
+      expect(repairedWork.node.attempt).toBe(2);
+      expect(repairedWork.context.predecessors).toContainEqual(
+        expect.objectContaining({
+          nodeId: "decide",
+          attempt: 1,
+          route: "repair",
+          summary: "Repair the draft.",
+          evidence: ["review finding"],
+        }),
+      );
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("fills one Actor fairly across multiple running Graphs", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(parallelGraph("fair-one"));
+      service.applyGraph(parallelGraph("fair-two"));
+      service.startWithAssignments("fair-one", "primary", "fair-one:run");
+      const second = service.startWithAssignments(
+        "fair-two",
+        "primary",
+        "fair-two:run",
+      );
+
+      expect(second.assignments).toHaveLength(4);
+      expect(
+        second.assignments.reduce<Record<string, number>>(
+          (counts, assignment) => ({
+            ...counts,
+            [assignment.graph.graphId]:
+              (counts[assignment.graph.graphId] ?? 0) + 1,
+          }),
+          {},
+        ),
+      ).toEqual({ "fair-one": 2, "fair-two": 2 });
+      expect(service.config.maxAssignmentsPerActor).toBe(8);
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("enforces the Actor cap transactionally and bounds schedule context", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(wideGraph("actor-cap"));
+      service.startRun("actor-cap", "actor-cap:run");
+      for (let index = 0; index < 8; index += 1) {
+        service.claim("actor-cap:run", `task-${index}`, "bounded-actor");
+      }
+      try {
+        service.claim("actor-cap:run", "task-8", "bounded-actor");
+        throw new Error("Expected ACTOR_ASSIGNMENT_LIMIT_REACHED");
+      } catch (error) {
+        expect(error).toBeInstanceOf(BurnGraphError);
+        expect((error as BurnGraphError).code).toBe(
+          "ACTOR_ASSIGNMENT_LIMIT_REACHED",
+        );
+      }
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+
+    const scheduleRoot = createTestProject();
+    const scheduleService = new BurnGraphService(scheduleRoot);
+    try {
+      scheduleService.applyGraph(wideGraph("bounded-schedule", 500));
+      const startedAt = performance.now();
+      const schedule = scheduleService.startWithAssignments(
+        "bounded-schedule",
+        "bounded-actor",
+        "bounded-schedule:run",
+      );
+      const elapsedMs = performance.now() - startedAt;
+      expect(schedule.assignments).toHaveLength(8);
+      expect(schedule.remainingReadyCount).toBe(492);
+      expect(schedule.remainingReady).toHaveLength(32);
+      expect(schedule.activeRunCount).toBe(1);
+      expect(schedule.runs).toHaveLength(1);
+      expect(elapsedMs).toBeLessThan(1_000);
+    } finally {
+      scheduleService.close();
+      removeTestProject(scheduleRoot);
+    }
+  });
+
+  test("rejects a stale blocked Assignment when a later Attempt is blocked", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(loopGraph("guarded-unblock"));
+      const first = service.startWithAssignments(
+        "guarded-unblock",
+        "primary",
+        "guarded-unblock:run",
+      ).assignments[0]!;
+      service.blockAssignment(first.assignmentId, "Block Attempt 1.");
+      const second = service.unblockAssignment(first.assignmentId)
+        .assignments[0]!;
+      expect(second.node.attempt).toBe(2);
+      service.blockAssignment(second.assignmentId, "Block Attempt 2.");
+
+      try {
+        service.unblockAssignment(first.assignmentId);
+        throw new Error("Expected ASSIGNMENT_STALE");
+      } catch (error) {
+        expect(error).toBeInstanceOf(BurnGraphError);
+        expect((error as BurnGraphError).code).toBe("ASSIGNMENT_STALE");
+      }
+      expect(
+        service
+          .getSnapshot("guarded-unblock:run", 0)
+          .nodes.find((node) => node.id === "work"),
+      ).toMatchObject({ status: "blocked", attempt: 2 });
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("returns the most recent bounded events in snapshots", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(loopGraph("recent-events"));
+      const assignment = service.startWithAssignments(
+        "recent-events",
+        "primary",
+        "recent-events:run",
+      ).assignments[0]!;
+      service.heartbeatAssignment(assignment.assignmentId);
+      service.checkpointAssignment(assignment.assignmentId, {
+        summary: "Checkpoint.",
+        progress: 50,
+        artifacts: [],
+      });
+      const all = service.listEvents("recent-events:run", 0, 100);
+      const recent = service.getSnapshot("recent-events:run", 2).events;
+      expect(recent.map((event) => event.sequence)).toEqual(
+        all.slice(-2).map((event) => event.sequence),
+      );
     } finally {
       service.close();
       removeTestProject(root);

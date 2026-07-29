@@ -11,6 +11,7 @@ import {
   type AssignmentPacket,
   type CheckpointInput,
   type CompletionInput,
+  type CompletionContinuation,
   type GraphCounts,
   type GraphEvent,
   type GraphSnapshot,
@@ -19,8 +20,11 @@ import {
   type GraphSummary,
   type MutationResult,
   type ProjectConfig,
+  type ReadyWork,
+  type RuntimeChange,
   type RuntimeEdge,
   type RuntimeNode,
+  type WorkSchedule,
 } from "./contracts.ts";
 import { renderMermaid } from "./mermaid.ts";
 import {
@@ -38,6 +42,23 @@ import {
 
 type SqlValue = string | number | bigint | null;
 type Row = Record<string, SqlValue>;
+const MAX_SCHEDULE_READY_PREVIEW = 32;
+const MAX_SCHEDULE_RUN_SUMMARIES = 8;
+
+interface AssignmentIdentity {
+  readonly assignmentId: string;
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly attempt: number;
+  readonly actorId: string;
+  readonly status: string;
+  readonly result: CompletionInput | null;
+}
+
+interface AssignmentExpectation {
+  readonly assignmentId: string;
+  readonly attempt: number;
+}
 
 function stringValue(row: Row, key: string): string {
   const value = row[key];
@@ -69,6 +90,26 @@ function parseJson<T>(value: string | null): T | null {
 
 function json(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function stableJson(value: unknown): string {
+  const normalize = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) return candidate.map(normalize);
+    if (
+      candidate !== null &&
+      typeof candidate === "object" &&
+      Object.getPrototypeOf(candidate) === Object.prototype
+    ) {
+      return Object.fromEntries(
+        Object.entries(candidate)
+          .filter(([, entry]) => entry !== undefined)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, entry]) => [key, normalize(entry)]),
+      );
+    }
+    return candidate;
+  };
+  return JSON.stringify(normalize(value));
 }
 
 function runIdFor(graphId: string, now: Date): string {
@@ -262,9 +303,9 @@ export class BurnGraphService {
           .query(
             `INSERT INTO node_runs (
                run_id, node_id, node_type, title, status, attempt,
-               actor_id, lease_expires_at, heartbeat_at,
+               assignment_id, actor_id, lease_expires_at, heartbeat_at,
                route, result_json, checkpoint_json, last_error, updated_at
-             ) VALUES (?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL,
+             ) VALUES (?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, NULL,
                        NULL, NULL, NULL, NULL, ?)`,
           )
           .run(runId, node.id, node.type, node.title, at);
@@ -327,8 +368,69 @@ export class BurnGraphService {
       spec,
       nodes,
       edges,
-      events: this.listEvents(runId, 0, eventLimit),
+      events:
+        eventLimit === 0 ? [] : this.recentEventsForRun(runId, eventLimit),
       mermaid: renderMermaid(spec, nodes, edges),
+    };
+  }
+
+  inspectNode(reference: string, nodeId: string, eventLimit = 50): {
+    readonly summary: GraphSummary;
+    readonly spec: GraphSpec["nodes"][number];
+    readonly runtime: RuntimeNode;
+    readonly incoming: readonly RuntimeEdge[];
+    readonly outgoing: readonly RuntimeEdge[];
+    readonly attempts: readonly {
+      readonly attempt: number;
+      readonly assignmentId: string | null;
+      readonly status: string;
+      readonly actorId: string | null;
+      readonly result: CompletionInput | null;
+      readonly checkpoint: CheckpointInput | null;
+      readonly route: string | null;
+      readonly startedAt: string;
+      readonly finishedAt: string | null;
+    }[];
+    readonly events: readonly GraphEvent[];
+  } {
+    const runId = this.resolveRun(reference);
+    const snapshot = this.getSnapshot(runId, eventLimit);
+    const spec = snapshot.spec.nodes.find((node) => node.id === nodeId);
+    const runtime = snapshot.nodes.find((node) => node.id === nodeId);
+    if (!spec || !runtime) {
+      throw new BurnGraphError("NODE_NOT_FOUND", `Unknown node ${nodeId}`);
+    }
+    const attempts = this.database.db
+      .query(
+        `SELECT attempt, assignment_id, status, actor_id, result_json,
+                checkpoint_json, route, started_at, finished_at
+           FROM attempts
+          WHERE run_id = ? AND node_id = ?
+          ORDER BY attempt`,
+      )
+      .all(runId, nodeId) as Row[];
+    return {
+      summary: snapshot.summary,
+      spec,
+      runtime,
+      incoming: snapshot.edges.filter((edge) => edge.to === nodeId),
+      outgoing: snapshot.edges.filter((edge) => edge.from === nodeId),
+      attempts: attempts.map((row) => ({
+        attempt: numberValue(row, "attempt"),
+        assignmentId: optionalString(row, "assignment_id"),
+        status: stringValue(row, "status"),
+        actorId: optionalString(row, "actor_id"),
+        result: parseJson<CompletionInput>(optionalString(row, "result_json")),
+        checkpoint: parseJson<CheckpointInput>(
+          optionalString(row, "checkpoint_json"),
+        ),
+        route: optionalString(row, "route"),
+        startedAt: stringValue(row, "started_at"),
+        finishedAt: optionalString(row, "finished_at"),
+      })),
+      events: snapshot.events.filter(
+        (event) => event.nodeId === null || event.nodeId === nodeId,
+      ),
     };
   }
 
@@ -363,7 +465,8 @@ export class BurnGraphService {
         .query(
           `UPDATE node_runs
               SET status = CASE WHEN status = 'running' THEN 'blocked' ELSE status END,
-                  actor_id = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
+                  assignment_id = NULL, actor_id = NULL,
+                  lease_expires_at = NULL, heartbeat_at = NULL,
                   updated_at = ?
             WHERE run_id = ?`,
         )
@@ -385,16 +488,7 @@ export class BurnGraphService {
     return this.mutationSnapshot(runId, sequence);
   }
 
-  listReady(graphReference?: string): readonly {
-    readonly runId: string;
-    readonly graphId: string;
-    readonly nodeId: string;
-    readonly type: "task" | "decision";
-    readonly title: string;
-    readonly actorHint: string | null;
-    readonly attempt: number;
-    readonly updatedAt: string;
-  }[] {
+  listReady(graphReference?: string): readonly ReadyWork[] {
     const parameters: string[] = [];
     let filter = "";
     if (graphReference) {
@@ -416,14 +510,20 @@ export class BurnGraphService {
           ORDER BY n.updated_at, n.run_id, n.node_id`,
       )
       .all(...parameters) as Row[];
+    const graphsByRun = new Map<string, ValidatedGraph>();
     return rows.map((row) => {
-      const spec = validateGraphSpec(
-        JSON.parse(stringValue(row, "document_json")),
-      ).spec;
+      const runId = stringValue(row, "run_id");
+      let graph = graphsByRun.get(runId);
+      if (!graph) {
+        graph = validateGraphSpec(
+          JSON.parse(stringValue(row, "document_json")),
+        );
+        graphsByRun.set(runId, graph);
+      }
       const nodeId = stringValue(row, "node_id");
-      const node = spec.nodes.find((candidate) => candidate.id === nodeId)!;
+      const node = graph.nodesById.get(nodeId)!;
       return {
-        runId: stringValue(row, "run_id"),
+        runId,
         graphId: stringValue(row, "graph_id"),
         nodeId,
         type: node.type as "task" | "decision",
@@ -490,8 +590,8 @@ export class BurnGraphService {
         this.database.db
           .query(
             `UPDATE node_runs
-                SET status = 'ready', actor_id = NULL, lease_expires_at = NULL,
-                    heartbeat_at = NULL, updated_at = ?
+                SET status = 'ready', assignment_id = NULL, actor_id = NULL,
+                    lease_expires_at = NULL, heartbeat_at = NULL, updated_at = ?
               WHERE run_id = ? AND node_id = ?`,
           )
           .run(at, runId, nodeId);
@@ -524,6 +624,24 @@ export class BurnGraphService {
             WHERE run_id = ? AND status = 'running'`,
         )
         .get(runId) as Row;
+      const actorRunningCount = this.database.db
+        .query(
+          `SELECT COUNT(*) AS count
+             FROM node_runs
+            WHERE actor_id = ? AND status = 'running'`,
+        )
+        .get(actorId) as Row;
+      if (
+        numberValue(actorRunningCount, "count") >=
+        this.config.maxAssignmentsPerActor
+      ) {
+        throw new BurnGraphError(
+          "ACTOR_ASSIGNMENT_LIMIT_REACHED",
+          `${actorId} already has ${this.config.maxAssignmentsPerActor} active Assignments`,
+          true,
+          { limit: this.config.maxAssignmentsPerActor },
+        );
+      }
       if (numberValue(runningCount, "count") >= validated.spec.maxActive) {
         throw new BurnGraphError(
           "MAX_ACTIVE_REACHED",
@@ -532,16 +650,18 @@ export class BurnGraphService {
         );
       }
       const attempt = numberValue(row, "attempt") + 1;
+      const assignmentId = crypto.randomUUID();
       this.database.db
         .query(
           `UPDATE node_runs
-              SET status = 'running', attempt = ?, actor_id = ?,
+              SET status = 'running', attempt = ?, assignment_id = ?, actor_id = ?,
                   lease_expires_at = ?, heartbeat_at = ?,
                   checkpoint_json = NULL, last_error = NULL, updated_at = ?
             WHERE run_id = ? AND node_id = ?`,
         )
         .run(
           attempt,
+          assignmentId,
           actorId,
           expiresAt,
           at,
@@ -552,11 +672,11 @@ export class BurnGraphService {
       this.database.db
         .query(
           `INSERT INTO attempts (
-             run_id, node_id, attempt, status, actor_id, result_json,
+             run_id, node_id, attempt, status, assignment_id, actor_id, result_json,
              checkpoint_json, route, started_at, finished_at
-           ) VALUES (?, ?, ?, 'running', ?, NULL, NULL, NULL, ?, NULL)`,
+           ) VALUES (?, ?, ?, 'running', ?, ?, NULL, NULL, NULL, ?, NULL)`,
         )
-        .run(runId, nodeId, attempt, actorId, at);
+        .run(runId, nodeId, attempt, assignmentId, actorId, at);
       this.database.db
         .query(
           `INSERT INTO actor_focus (actor_id, run_id, node_id, updated_at)
@@ -577,6 +697,7 @@ export class BurnGraphService {
         payload: {
           actorId,
           attempt,
+          assignmentId,
           leaseExpiresAt: expiresAt,
           recoveredExpiredAttempt,
           revision,
@@ -586,9 +707,8 @@ export class BurnGraphService {
     });
 
     const packet = this.assignmentPacket(runId, nodeId, actorId);
-    const snapshot = this.getSnapshot(runId);
     return {
-      revision: snapshot.summary.runtimeRevision,
+      revision: this.summaryForRun(runId).runtimeRevision,
       event: this.getEvent(sequence),
       value: packet,
     };
@@ -599,6 +719,7 @@ export class BurnGraphService {
     nodeId: string,
     actorId: string,
     leaseSeconds?: number,
+    expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
     IdentifierSchema.parse(actorId);
     const runId = this.resolveRun(reference);
@@ -609,7 +730,13 @@ export class BurnGraphService {
     );
     const expiresAt = leaseTime(now, duration);
     const sequence = this.database.immediate(() => {
-      const row = this.requireOwnedRunningNode(runId, nodeId, actorId, now);
+      const row = this.requireOwnedRunningNode(
+        runId,
+        nodeId,
+        actorId,
+        now,
+        expectation,
+      );
       this.database.db
         .query(
           `UPDATE node_runs
@@ -637,13 +764,20 @@ export class BurnGraphService {
     nodeId: string,
     actorId: string,
     input: unknown,
+    expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
     const checkpoint = CheckpointInputSchema.parse(input);
     const runId = this.resolveRun(reference);
     const now = this.now();
     const at = now.toISOString();
     const sequence = this.database.immediate(() => {
-      const row = this.requireOwnedRunningNode(runId, nodeId, actorId, now);
+      const row = this.requireOwnedRunningNode(
+        runId,
+        nodeId,
+        actorId,
+        now,
+        expectation,
+      );
       const attempt = numberValue(row, "attempt");
       this.database.db
         .query(
@@ -679,6 +813,7 @@ export class BurnGraphService {
     nodeId: string,
     actorId: string,
     input: unknown,
+    expectation?: AssignmentExpectation,
   ): MutationResult<GraphSnapshot> {
     const completion = CompletionInputSchema.parse(input);
     const runId = this.resolveRun(reference);
@@ -736,14 +871,20 @@ export class BurnGraphService {
     const now = this.now();
     const at = now.toISOString();
     const sequence = this.database.immediate(() => {
-      const node = this.requireOwnedRunningNode(runId, nodeId, actorId, now);
+      const node = this.requireOwnedRunningNode(
+        runId,
+        nodeId,
+        actorId,
+        now,
+        expectation,
+      );
       const attempt = numberValue(node, "attempt");
       const run = this.runRow(runId);
       this.database.db
         .query(
           `UPDATE node_runs
-              SET status = 'done', actor_id = NULL, lease_expires_at = NULL,
-                  heartbeat_at = NULL, route = ?,
+              SET status = 'done', assignment_id = NULL, actor_id = NULL,
+                  lease_expires_at = NULL, heartbeat_at = NULL, route = ?,
                   result_json = ?, checkpoint_json = NULL, updated_at = ?
             WHERE run_id = ? AND node_id = ?`,
         )
@@ -830,8 +971,17 @@ export class BurnGraphService {
     nodeId: string,
     actorId: string,
     reason: string,
+    expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
-    return this.stopNode(reference, nodeId, actorId, "blocked", reason, false);
+    return this.stopNode(
+      reference,
+      nodeId,
+      actorId,
+      "blocked",
+      reason,
+      false,
+      expectation,
+    );
   }
 
   fail(
@@ -840,8 +990,17 @@ export class BurnGraphService {
     actorId: string,
     reason: string,
     retry: boolean,
+    expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
-    return this.stopNode(reference, nodeId, actorId, "failed", reason, retry);
+    return this.stopNode(
+      reference,
+      nodeId,
+      actorId,
+      "failed",
+      reason,
+      retry,
+      expectation,
+    );
   }
 
   release(
@@ -849,11 +1008,24 @@ export class BurnGraphService {
     nodeId: string,
     actorId: string,
     reason = "Released by actor.",
+    expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
-    return this.stopNode(reference, nodeId, actorId, "ready", reason, false);
+    return this.stopNode(
+      reference,
+      nodeId,
+      actorId,
+      "ready",
+      reason,
+      false,
+      expectation,
+    );
   }
 
-  unblock(reference: string, nodeId: string): MutationResult<RuntimeNode> {
+  unblock(
+    reference: string,
+    nodeId: string,
+    expectation?: AssignmentExpectation,
+  ): MutationResult<RuntimeNode> {
     const runId = this.resolveRun(reference);
     const at = this.timestamp();
     const sequence = this.database.immediate(() => {
@@ -862,6 +1034,20 @@ export class BurnGraphService {
         throw new BurnGraphError(
           "NODE_NOT_BLOCKED",
           `Node ${nodeId} is ${stringValue(node, "status")}`,
+        );
+      }
+      if (
+        expectation !== undefined &&
+        numberValue(node, "attempt") !== expectation.attempt
+      ) {
+        throw new BurnGraphError(
+          "ASSIGNMENT_STALE",
+          `Assignment ${expectation.assignmentId} no longer owns the blocked Attempt`,
+          false,
+          {
+            expectedAttempt: expectation.attempt,
+            currentAttempt: numberValue(node, "attempt"),
+          },
         );
       }
       this.database.db
@@ -890,21 +1076,19 @@ export class BurnGraphService {
     reference: string,
     nodeId: string,
     actorId: string,
+    expectation?: AssignmentExpectation,
   ): MutationResult<AssignmentPacket> {
     IdentifierSchema.parse(actorId);
     const runId = this.resolveRun(reference);
     const at = this.timestamp();
     const sequence = this.database.immediate(() => {
-      const node = this.nodeRow(runId, nodeId);
-      if (
-        stringValue(node, "status") !== "running" ||
-        optionalString(node, "actor_id") !== actorId
-      ) {
-        throw new BurnGraphError(
-          "NOT_NODE_OWNER",
-          `${actorId} does not own running node ${nodeId}`,
-        );
-      }
+      const node = this.requireOwnedRunningNode(
+        runId,
+        nodeId,
+        actorId,
+        new Date(at),
+        expectation,
+      );
       this.database.db
         .query(
           `INSERT INTO actor_focus (actor_id, run_id, node_id, updated_at)
@@ -946,7 +1130,8 @@ export class BurnGraphService {
       .get(actorId) as Row | null;
     const rows = this.database.db
       .query(
-        `SELECT n.run_id, r.graph_id, n.node_id, n.title, n.lease_expires_at
+        `SELECT n.run_id, r.graph_id, n.node_id, n.assignment_id, n.title,
+                n.lease_expires_at
            FROM node_runs n
            JOIN runs r ON r.run_id = n.run_id
           WHERE n.actor_id = ? AND n.status = 'running'
@@ -965,9 +1150,375 @@ export class BurnGraphService {
         runId: stringValue(row, "run_id"),
         graphId: stringValue(row, "graph_id"),
         nodeId: stringValue(row, "node_id"),
+        assignmentId: stringValue(row, "assignment_id"),
         title: stringValue(row, "title"),
         leaseExpiresAt: stringValue(row, "lease_expires_at"),
       })),
+    };
+  }
+
+  assignmentsForActor(actorId: string): readonly AssignmentPacket[] {
+    const work = this.actorWork(actorId);
+    const focused = work.focused;
+    return [...work.claimed]
+      .sort((left, right) => {
+        const leftFocused =
+          focused?.runId === left.runId && focused.nodeId === left.nodeId;
+        const rightFocused =
+          focused?.runId === right.runId && focused.nodeId === right.nodeId;
+        if (leftFocused !== rightFocused) return leftFocused ? -1 : 1;
+        return left.assignmentId.localeCompare(right.assignmentId);
+      })
+      .map((claim) =>
+        this.assignmentPacket(claim.runId, claim.nodeId, actorId),
+      );
+  }
+
+  schedule(actorId: string, preferredRunId?: string): WorkSchedule {
+    IdentifierSchema.parse(actorId);
+    const changes: RuntimeChange[] = this.reconcileExpired().map((result) => ({
+      revision: result.revision,
+      event: result.event,
+    }));
+    const assignments = [...this.assignmentsForActor(actorId)];
+    let availableSlots =
+      this.config.maxAssignmentsPerActor - assignments.length;
+
+    const runningRuns = this.listRuns()
+      .filter((run) => run.status === "running")
+      .sort((left, right) => {
+        if (left.runId === preferredRunId) return -1;
+        if (right.runId === preferredRunId) return 1;
+        return (
+          left.updatedAt.localeCompare(right.updatedAt) ||
+          left.runId.localeCompare(right.runId)
+        );
+      });
+    const candidates = [...this.listReady()].sort((left, right) => {
+      const actorRank = (candidate: ReadyWork): number =>
+        candidate.actorHint === actorId
+          ? 0
+          : candidate.actorHint === null
+            ? 1
+            : 2;
+      return (
+        actorRank(left) - actorRank(right) ||
+        left.updatedAt.localeCompare(right.updatedAt) ||
+        left.nodeId.localeCompare(right.nodeId)
+      );
+    });
+    const saturatedRuns = new Set<string>();
+
+    while (availableSlots > 0 && candidates.length > 0) {
+      let claimedInRound = false;
+      for (const run of runningRuns) {
+        if (availableSlots === 0) break;
+        if (saturatedRuns.has(run.runId)) continue;
+        const candidateIndex = candidates.findIndex(
+          (candidate) => candidate.runId === run.runId,
+        );
+        if (candidateIndex < 0) continue;
+        const [candidate] = candidates.splice(candidateIndex, 1);
+        if (!candidate) continue;
+        try {
+          const claimed = this.claim(
+            candidate.runId,
+            candidate.nodeId,
+            actorId,
+          );
+          assignments.push(claimed.value);
+          changes.push({
+            revision: claimed.revision,
+            event: claimed.event,
+          });
+          availableSlots -= 1;
+          claimedInRound = true;
+        } catch (error) {
+          if (
+            error instanceof BurnGraphError &&
+            ["MAX_ACTIVE_REACHED", "RUN_NOT_RUNNING"].includes(error.code)
+          ) {
+            saturatedRuns.add(run.runId);
+            continue;
+          }
+          if (
+            error instanceof BurnGraphError &&
+            error.code === "ACTOR_ASSIGNMENT_LIMIT_REACHED"
+          ) {
+            availableSlots = 0;
+            break;
+          }
+          if (
+            error instanceof BurnGraphError &&
+            error.retryable &&
+            error.code === "NODE_NOT_READY"
+          ) {
+            continue;
+          }
+          throw error;
+        }
+      }
+      if (!claimedInRound) break;
+    }
+
+    const finalAssignments = [...this.assignmentsForActor(actorId)];
+    const allRuns = this.listRuns();
+    const activeRuns = allRuns.filter(
+      (run) => run.status === "running" || run.status === "paused",
+    );
+    const runCandidates = [
+      ...(preferredRunId
+        ? allRuns.filter((run) => run.runId === preferredRunId)
+        : []),
+      ...activeRuns,
+    ];
+    const seenRuns = new Set<string>();
+    const runs = runCandidates
+      .filter((run) => {
+        if (seenRuns.has(run.runId)) return false;
+        seenRuns.add(run.runId);
+        return true;
+      })
+      .slice(0, MAX_SCHEDULE_RUN_SUMMARIES);
+    const allRemainingReady = this.listReady();
+    return {
+      actorId,
+      state: this.scheduleState(finalAssignments, allRuns),
+      assignments: finalAssignments,
+      remainingReady: allRemainingReady.slice(
+        0,
+        MAX_SCHEDULE_READY_PREVIEW,
+      ),
+      remainingReadyCount: allRemainingReady.length,
+      activeRunCount: activeRuns.length,
+      runs,
+      changes,
+    };
+  }
+
+  startWithAssignments(
+    graphId: string,
+    actorId: string,
+    requestedRunId?: string,
+  ): WorkSchedule & { readonly started: GraphSummary } {
+    const started = this.startRun(graphId, requestedRunId);
+    const runId = started.value.summary.runId;
+    const scheduled = this.schedule(actorId, runId);
+    return {
+      ...scheduled,
+      started: this.summaryForRun(runId),
+      changes: [
+        { revision: started.revision, event: started.event },
+        ...scheduled.changes,
+      ],
+    };
+  }
+
+  resumeWithAssignments(
+    reference: string,
+    actorId: string,
+  ): WorkSchedule & { readonly resumed: GraphSummary } {
+    const resumed = this.resumeRun(reference);
+    const runId = resumed.value.summary.runId;
+    const scheduled = this.schedule(actorId, runId);
+    return {
+      ...scheduled,
+      resumed: this.summaryForRun(runId),
+      changes: [
+        { revision: resumed.revision, event: resumed.event },
+        ...scheduled.changes,
+      ],
+    };
+  }
+
+  completeAndContinue(
+    assignmentId: string,
+    input: unknown,
+  ): CompletionContinuation {
+    const completion = CompletionInputSchema.parse(input);
+    let identity = this.assignmentIdentity(assignmentId);
+    let replayed = false;
+    const changes: RuntimeChange[] = [];
+
+    if (identity.status === "done") {
+      this.requireMatchingReplay(identity, completion);
+      replayed = true;
+    } else if (identity.status === "running") {
+      try {
+        const completed = this.complete(
+          identity.runId,
+          identity.nodeId,
+          identity.actorId,
+          completion,
+          {
+            assignmentId,
+            attempt: identity.attempt,
+          },
+        );
+        changes.push({
+          revision: completed.revision,
+          event: completed.event,
+        });
+      } catch (error) {
+        const current = this.assignmentIdentity(assignmentId);
+        if (current.status !== "done") throw error;
+        this.requireMatchingReplay(current, completion);
+        identity = current;
+        replayed = true;
+      }
+    } else {
+      throw new BurnGraphError(
+        "ASSIGNMENT_NOT_ACTIVE",
+        `Assignment ${assignmentId} is ${identity.status}`,
+        false,
+        { status: identity.status },
+      );
+    }
+
+    const scheduled = this.schedule(identity.actorId, identity.runId);
+    return {
+      ...scheduled,
+      completed: {
+        assignmentId,
+        runId: identity.runId,
+        nodeId: identity.nodeId,
+        attempt: identity.attempt,
+        result: replayed ? identity.result! : completion,
+      },
+      replayed,
+      changes: [...changes, ...scheduled.changes],
+    };
+  }
+
+  focusAssignment(assignmentId: string): MutationResult<AssignmentPacket> {
+    const identity = this.assignmentIdentity(assignmentId);
+    return this.focus(identity.runId, identity.nodeId, identity.actorId, {
+      assignmentId,
+      attempt: identity.attempt,
+    });
+  }
+
+  heartbeatAssignment(
+    assignmentId: string,
+  ): MutationResult<RuntimeNode> {
+    const identity = this.assignmentIdentity(assignmentId);
+    return this.heartbeat(
+      identity.runId,
+      identity.nodeId,
+      identity.actorId,
+      undefined,
+      { assignmentId, attempt: identity.attempt },
+    );
+  }
+
+  checkpointAssignment(
+    assignmentId: string,
+    input: unknown,
+  ): MutationResult<RuntimeNode> {
+    const identity = this.assignmentIdentity(assignmentId);
+    return this.checkpoint(
+      identity.runId,
+      identity.nodeId,
+      identity.actorId,
+      input,
+      { assignmentId, attempt: identity.attempt },
+    );
+  }
+
+  blockAssignment(
+    assignmentId: string,
+    reason: string,
+  ): WorkSchedule & { readonly blocked: RuntimeNode } {
+    const identity = this.assignmentIdentity(assignmentId);
+    const blocked = this.block(
+      identity.runId,
+      identity.nodeId,
+      identity.actorId,
+      reason,
+      { assignmentId, attempt: identity.attempt },
+    );
+    const scheduled = this.schedule(identity.actorId, identity.runId);
+    return {
+      ...scheduled,
+      blocked: blocked.value,
+      changes: [
+        { revision: blocked.revision, event: blocked.event },
+        ...scheduled.changes,
+      ],
+    };
+  }
+
+  releaseAssignment(
+    assignmentId: string,
+    reason: string,
+  ): WorkSchedule & { readonly released: RuntimeNode } {
+    const identity = this.assignmentIdentity(assignmentId);
+    const released = this.release(
+      identity.runId,
+      identity.nodeId,
+      identity.actorId,
+      reason,
+      { assignmentId, attempt: identity.attempt },
+    );
+    const scheduled = this.schedule(identity.actorId, identity.runId);
+    return {
+      ...scheduled,
+      released: released.value,
+      changes: [
+        { revision: released.revision, event: released.event },
+        ...scheduled.changes,
+      ],
+    };
+  }
+
+  failAssignment(
+    assignmentId: string,
+    reason: string,
+    retry: boolean,
+  ): WorkSchedule & { readonly failed: RuntimeNode } {
+    const identity = this.assignmentIdentity(assignmentId);
+    const failed = this.fail(
+      identity.runId,
+      identity.nodeId,
+      identity.actorId,
+      reason,
+      retry,
+      { assignmentId, attempt: identity.attempt },
+    );
+    const scheduled = this.schedule(identity.actorId, identity.runId);
+    return {
+      ...scheduled,
+      failed: failed.value,
+      changes: [
+        { revision: failed.revision, event: failed.event },
+        ...scheduled.changes,
+      ],
+    };
+  }
+
+  unblockAssignment(
+    assignmentId: string,
+  ): WorkSchedule & { readonly unblocked: RuntimeNode } {
+    const identity = this.assignmentIdentity(assignmentId);
+    if (identity.status !== "blocked") {
+      throw new BurnGraphError(
+        "ASSIGNMENT_NOT_BLOCKED",
+        `Assignment ${assignmentId} is ${identity.status}`,
+      );
+    }
+    const unblocked = this.unblock(
+      identity.runId,
+      identity.nodeId,
+      { assignmentId, attempt: identity.attempt },
+    );
+    const scheduled = this.schedule(identity.actorId, identity.runId);
+    return {
+      ...scheduled,
+      unblocked: unblocked.value,
+      changes: [
+        { revision: unblocked.revision, event: unblocked.event },
+        ...scheduled.changes,
+      ],
     };
   }
 
@@ -1021,8 +1572,8 @@ export class BurnGraphService {
           this.database.db
             .query(
               `UPDATE node_runs
-                  SET status = 'ready', actor_id = NULL, lease_expires_at = NULL,
-                      heartbeat_at = NULL,
+                  SET status = 'ready', assignment_id = NULL, actor_id = NULL,
+                      lease_expires_at = NULL, heartbeat_at = NULL,
                       last_error = 'Lease expired', updated_at = ?
                 WHERE run_id = ? AND node_id = ?`,
             )
@@ -1287,6 +1838,7 @@ export class BurnGraphService {
       title: stringValue(row, "title"),
       status: NodeStatusSchema.parse(stringValue(row, "status")),
       attempt: numberValue(row, "attempt"),
+      assignmentId: optionalString(row, "assignment_id"),
       actorId: optionalString(row, "actor_id"),
       leaseExpiresAt: optionalString(row, "lease_expires_at"),
       route: optionalString(row, "route"),
@@ -1349,11 +1901,87 @@ export class BurnGraphService {
     };
   }
 
+  private assignmentIdentity(assignmentId: string): AssignmentIdentity {
+    if (!z.string().uuid().safeParse(assignmentId).success) {
+      throw new BurnGraphError(
+        "ASSIGNMENT_NOT_FOUND",
+        "Assignment ID is not a valid handle",
+      );
+    }
+    const row = this.database.db
+      .query(
+        `SELECT assignment_id, run_id, node_id, attempt, actor_id, status,
+                result_json
+           FROM attempts
+          WHERE assignment_id = ?`,
+      )
+      .get(assignmentId) as Row | null;
+    if (!row) {
+      throw new BurnGraphError(
+        "ASSIGNMENT_NOT_FOUND",
+        `Unknown Assignment ${assignmentId}`,
+      );
+    }
+    return {
+      assignmentId: stringValue(row, "assignment_id"),
+      runId: stringValue(row, "run_id"),
+      nodeId: stringValue(row, "node_id"),
+      attempt: numberValue(row, "attempt"),
+      actorId: stringValue(row, "actor_id"),
+      status: stringValue(row, "status"),
+      result: parseJson<CompletionInput>(optionalString(row, "result_json")),
+    };
+  }
+
+  private requireMatchingReplay(
+    identity: AssignmentIdentity,
+    completion: CompletionInput,
+  ): void {
+    if (
+      identity.result === null ||
+      stableJson(identity.result) !== stableJson(completion)
+    ) {
+      throw new BurnGraphError(
+        "ASSIGNMENT_INPUT_CONFLICT",
+        `Assignment ${identity.assignmentId} was already completed with different input`,
+        false,
+        { runId: identity.runId, nodeId: identity.nodeId },
+      );
+    }
+  }
+
+  private scheduleState(
+    assignments: readonly AssignmentPacket[],
+    runs: readonly GraphSummary[],
+  ): WorkSchedule["state"] {
+    if (assignments.length > 0) return "assigned";
+    if (runs.length === 0) return "waiting";
+    if (runs.some((run) => run.status === "running" || run.status === "paused")) {
+      const active = runs.filter(
+        (run) => run.status === "running" || run.status === "paused",
+      );
+      return active.some(
+        (run) =>
+          run.counts.blocked > 0 &&
+          run.counts.ready === 0 &&
+          run.counts.running === 0,
+      )
+        ? "blocked"
+        : "waiting";
+    }
+    return runs.every(
+      (run) => run.status === "completed" || run.status === "cancelled",
+    )
+      ? "completed"
+      : "blocked";
+  }
+
   private requireOwnedRunningNode(
     runId: string,
     nodeId: string,
     actorId: string,
     now: Date,
+    expectation?: AssignmentExpectation,
   ): Row {
     IdentifierSchema.parse(actorId);
     const row = this.nodeRow(runId, nodeId);
@@ -1367,6 +1995,21 @@ export class BurnGraphService {
       throw new BurnGraphError(
         "NOT_NODE_OWNER",
         `${actorId} does not own ${nodeId}`,
+      );
+    }
+    if (
+      expectation !== undefined &&
+      (optionalString(row, "assignment_id") !== expectation.assignmentId ||
+        numberValue(row, "attempt") !== expectation.attempt)
+    ) {
+      throw new BurnGraphError(
+        "ASSIGNMENT_STALE",
+        `Assignment ${expectation.assignmentId} is no longer active`,
+        false,
+        {
+          expectedAttempt: expectation.attempt,
+          currentAttempt: numberValue(row, "attempt"),
+        },
       );
     }
     if (isExpired(optionalString(row, "lease_expires_at"), now)) {
@@ -1491,8 +2134,8 @@ export class BurnGraphService {
     this.database.db
       .query(
         `UPDATE node_runs
-            SET status = 'pending', actor_id = NULL, lease_expires_at = NULL,
-                heartbeat_at = NULL, route = NULL,
+            SET status = 'pending', assignment_id = NULL, actor_id = NULL,
+                lease_expires_at = NULL, heartbeat_at = NULL, route = NULL,
                 result_json = NULL, checkpoint_json = NULL, last_error = NULL,
                 updated_at = ?
           WHERE run_id = ? AND node_id IN (${placeholders})`,
@@ -1574,6 +2217,7 @@ export class BurnGraphService {
     requestedStatus: "ready" | "blocked" | "failed",
     reason: string,
     retry: boolean,
+    expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
     if (reason.trim().length === 0) {
       throw new BurnGraphError("REASON_REQUIRED", "A non-empty reason is required");
@@ -1585,7 +2229,13 @@ export class BurnGraphService {
     const now = this.now();
     const at = now.toISOString();
     const sequence = this.database.immediate(() => {
-      const node = this.requireOwnedRunningNode(runId, nodeId, actorId, now);
+      const node = this.requireOwnedRunningNode(
+        runId,
+        nodeId,
+        actorId,
+        now,
+        expectation,
+      );
       const attempt = numberValue(node, "attempt");
       const shouldRetry =
         requestedStatus === "failed" && retry && attempt < nodeSpec.maxAttempts;
@@ -1602,8 +2252,8 @@ export class BurnGraphService {
       this.database.db
         .query(
           `UPDATE node_runs
-              SET status = ?, actor_id = NULL, lease_expires_at = NULL,
-                  heartbeat_at = NULL,
+              SET status = ?, assignment_id = NULL, actor_id = NULL,
+                  lease_expires_at = NULL, heartbeat_at = NULL,
                   last_error = ?, checkpoint_json = NULL, updated_at = ?
             WHERE run_id = ? AND node_id = ?`,
         )
@@ -1746,33 +2396,66 @@ export class BurnGraphService {
     };
   }
 
+  private recentEventsForRun(
+    runId: string,
+    limit: number,
+  ): readonly GraphEvent[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+      throw new BurnGraphError("INVALID_LIMIT", "Event limit must be 1-1000");
+    }
+    const rows = this.database.db
+      .query(
+        `SELECT *
+           FROM events
+          WHERE run_id = ?
+          ORDER BY sequence DESC
+          LIMIT ?`,
+      )
+      .all(runId, limit) as Row[];
+    return rows.reverse().map((row) => this.eventFromRow(row));
+  }
+
   private assignmentPacket(
     runId: string,
     nodeId: string,
     actorId: string,
   ): AssignmentPacket {
-    const snapshot = this.getSnapshot(runId);
-    const nodeRuntime = snapshot.nodes.find((node) => node.id === nodeId);
-    const nodeSpec = snapshot.spec.nodes.find((node) => node.id === nodeId);
+    const summary = this.summaryForRun(runId);
+    const graph = this.graphForRun(runId);
+    const nodeRuntime = this.runtimeNode(this.nodeRow(runId, nodeId));
+    const nodeSpec = graph.nodesById.get(nodeId);
     if (
-      !nodeRuntime ||
       !nodeSpec ||
       (nodeSpec.type !== "task" && nodeSpec.type !== "decision")
     ) {
       throw new BurnGraphError("NODE_NOT_FOUND", `Unknown assignment ${nodeId}`);
     }
-    if (nodeRuntime.actorId !== actorId || nodeRuntime.leaseExpiresAt === null) {
+    if (
+      nodeRuntime.actorId !== actorId ||
+      nodeRuntime.assignmentId === null ||
+      nodeRuntime.leaseExpiresAt === null
+    ) {
       throw new BurnGraphError(
         "NOT_NODE_OWNER",
         `${actorId} does not own ${nodeId}`,
       );
     }
-    const incoming = snapshot.edges.filter((edge) => edge.to === nodeId);
+    const incoming = this.database.db
+      .query(
+        `SELECT from_node_id
+           FROM edge_runs
+          WHERE run_id = ? AND to_node_id = ?
+          ORDER BY edge_id`,
+      )
+      .all(runId, nodeId) as Row[];
     const predecessors = incoming
       .map((edge) => {
-        const runtime = snapshot.nodes.find((candidate) => candidate.id === edge.from);
-        const spec = snapshot.spec.nodes.find((candidate) => candidate.id === edge.from);
-        if (!runtime || !spec) return null;
+        const predecessorId = stringValue(edge, "from_node_id");
+        const runtime = this.runtimeNode(
+          this.nodeRow(runId, predecessorId),
+        );
+        const spec = graph.nodesById.get(predecessorId);
+        if (!spec) return null;
         const previous =
           runtime.result === null
             ? this.latestAttemptCompletion(runId, runtime.id)
@@ -1794,15 +2477,16 @@ export class BurnGraphService {
       .filter((value): value is NonNullable<typeof value> => value !== null);
     return {
       schemaVersion: 1,
+      assignmentId: nodeRuntime.assignmentId,
       projectId: this.config.projectId,
       graph: {
         runId,
-        graphId: snapshot.summary.graphId,
-        title: snapshot.summary.title,
-        goal: snapshot.summary.goal,
-        specRevision: snapshot.summary.specRevision,
-        runtimeRevision: snapshot.summary.runtimeRevision,
-        progress: snapshot.summary.counts,
+        graphId: summary.graphId,
+        title: summary.title,
+        goal: summary.goal,
+        specRevision: summary.specRevision,
+        runtimeRevision: summary.runtimeRevision,
+        progress: summary.counts,
       },
       node: {
         id: nodeId,
@@ -1811,16 +2495,17 @@ export class BurnGraphService {
         attempt: nodeRuntime.attempt,
         actorHint: nodeSpec.actorHint,
         prompt: nodeSpec.prompt,
-        routes: snapshot.edges
-          .filter((edge) => edge.from === nodeId && edge.route !== null)
+        routes: this.edgeRowsFrom(runId, nodeId)
+          .filter((edge) => optionalString(edge, "route") !== null)
           .map((edge) => ({
-            route: edge.route!,
-            to: edge.to,
-            label: edge.label,
+            route: stringValue(edge, "route"),
+            to: stringValue(edge, "to_node_id"),
+            label: optionalString(edge, "label"),
             remainingTraversals:
-              edge.maxTraversals === null
+              optionalNumber(edge, "max_traversals") === null
                 ? null
-                : edge.maxTraversals - edge.traversals,
+                : optionalNumber(edge, "max_traversals")! -
+                  numberValue(edge, "traversals"),
           })),
       },
       context: { predecessors },
@@ -1829,10 +2514,10 @@ export class BurnGraphService {
         leaseExpiresAt: nodeRuntime.leaseExpiresAt,
       },
       returnProtocol: {
-        checkpoint: `burn-graph work checkpoint ${runId} ${nodeId} --actor ${actorId} --input -`,
-        complete: `burn-graph work complete ${runId} ${nodeId} --actor ${actorId} --input -`,
-        block: `burn-graph work block ${runId} ${nodeId} --actor ${actorId} --reason <text>`,
-        fail: `burn-graph work fail ${runId} ${nodeId} --actor ${actorId} --reason <text>`,
+        checkpoint: `burn-graph recover checkpoint --assignment ${nodeRuntime.assignmentId} --input -`,
+        complete: `burn-graph done --assignment ${nodeRuntime.assignmentId} --input -`,
+        block: `burn-graph recover block --assignment ${nodeRuntime.assignmentId} --reason <text>`,
+        fail: `burn-graph recover fail --assignment ${nodeRuntime.assignmentId} --reason <text>`,
       },
     };
   }

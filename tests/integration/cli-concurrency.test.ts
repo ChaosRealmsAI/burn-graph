@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import path from "node:path";
 
+import { BurnGraphService } from "@burn-graph/core";
 import {
   createTestProject,
-  parallelGraph,
+  loopGraph,
   removeTestProject,
+  wideGraph,
 } from "../helpers/fixtures.ts";
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 
 const roots: string[] = [];
 const cli = path.resolve(import.meta.dir, "../../apps/cli/src/index.ts");
@@ -14,11 +15,17 @@ const cli = path.resolve(import.meta.dir, "../../apps/cli/src/index.ts");
 async function invoke(
   root: string,
   args: readonly string[],
+  stdin?: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const process = Bun.spawn(["bun", cli, "--root", root, ...args], {
+    stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
+  if (stdin !== undefined && process.stdin !== undefined) {
+    process.stdin.write(stdin);
+    process.stdin.end();
+  }
   const [exitCode, stdout, stderr] = await Promise.all([
     process.exited,
     new Response(process.stdout).text(),
@@ -32,64 +39,111 @@ afterEach(() => {
 });
 
 describe("public CLI concurrency", () => {
-  test("two processes racing for one node produce exactly one winner", async () => {
+  test("two Next processes racing for one node return exactly one Assignment", async () => {
     const root = createTestProject();
     roots.push(root);
-    const graphFile = path.join(root, "graph.json");
-    writeFileSync(graphFile, `${JSON.stringify(parallelGraph())}\n`);
-
-    expect(
-      (await invoke(root, ["graph", "apply", "--input", graphFile])).exitCode,
-    ).toBe(0);
-    expect(
-      (
-        await invoke(root, [
-          "run",
-          "start",
-          "parallel",
-          "--run-id",
-          "parallel:race",
-        ])
-      ).exitCode,
-    ).toBe(0);
+    const service = new BurnGraphService(root);
+    service.applyGraph(loopGraph("next-race"));
+    service.startRun("next-race", "next-race:run");
+    service.close();
 
     const contenders = await Promise.all([
       invoke(root, [
-        "work",
-        "claim",
-        "parallel:race",
-        "left",
+        "next",
         "--actor",
         "racer-one",
-        "--lease",
-        "60",
       ]),
       invoke(root, [
-        "work",
-        "claim",
-        "parallel:race",
-        "left",
+        "next",
         "--actor",
         "racer-two",
-        "--lease",
-        "60",
       ]),
     ]);
-    const winners = contenders.filter((result) => result.exitCode === 0);
-    const losers = contenders.filter((result) => result.exitCode !== 0);
+    expect(contenders.every((result) => result.exitCode === 0)).toBe(true);
+    const envelopes = contenders.map((result) => JSON.parse(result.stdout));
+    expect(
+      envelopes
+        .map((envelope) => envelope.data.assignments.length)
+        .sort((left, right) => left - right),
+    ).toEqual([0, 1]);
+    expect(
+      envelopes.flatMap((envelope) => envelope.data.assignments),
+    ).toHaveLength(1);
 
-    expect(winners).toHaveLength(1);
-    expect(losers).toHaveLength(1);
-    expect(JSON.parse(winners[0]!.stdout).ok).toBe(true);
-    const loser = JSON.parse(losers[0]!.stderr) as {
-      ok: boolean;
-      error: { code: string; retryable: boolean };
-    };
-    expect(loser.ok).toBe(false);
-    expect((loser as typeof loser & { command: string }).command).toBe(
-      "work.claim",
+    const persisted = new BurnGraphService(root);
+    expect(
+      persisted
+        .listEvents("next-race:run", 0, 100)
+        .filter((event) => event.type === "node.claimed"),
+    ).toHaveLength(1);
+    persisted.close();
+  });
+
+  test("concurrent Next calls cannot exceed one Actor's Assignment cap", async () => {
+    const root = createTestProject();
+    roots.push(root);
+    const service = new BurnGraphService(root);
+    service.applyGraph(wideGraph("next-cap"));
+    service.startRun("next-cap", "next-cap:run");
+    service.close();
+
+    const contenders = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        invoke(root, ["next", "--actor", "same-actor"]),
+      ),
     );
-    expect(loser.error.code).toBe("NODE_NOT_READY");
-    expect(loser.error.retryable).toBe(true);
+    expect(contenders.every((result) => result.exitCode === 0)).toBe(true);
+
+    const persisted = new BurnGraphService(root);
+    expect(persisted.actorWork("same-actor").claimed).toHaveLength(8);
+    expect(
+      persisted
+        .getSnapshot("next-cap:run", 0)
+        .nodes.filter((node) => node.status === "running"),
+    ).toHaveLength(8);
+    persisted.close();
+  });
+
+  test("concurrent equivalent Done calls converge as one completion", async () => {
+    const root = createTestProject();
+    roots.push(root);
+    const service = new BurnGraphService(root);
+    service.applyGraph(loopGraph("done-race"));
+    const assignment = service.startWithAssignments(
+      "done-race",
+      "same-actor",
+      "done-race:run",
+    ).assignments[0]!;
+    service.close();
+    const input = JSON.stringify({
+      summary: "One stable completion.",
+      evidence: ["race evidence"],
+    });
+
+    const contenders = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        invoke(
+          root,
+          ["done", "--assignment", assignment.assignmentId, "--input", "-"],
+          input,
+        ),
+      ),
+    );
+    expect(contenders.every((result) => result.exitCode === 0)).toBe(true);
+    const replayed = contenders
+      .map((result) => JSON.parse(result.stdout).data.replayed)
+      .sort();
+    expect(replayed).toEqual([false, true, true, true]);
+
+    const persisted = new BurnGraphService(root);
+    expect(
+      persisted
+        .listEvents("done-race:run", 0, 100)
+        .filter(
+          (event) =>
+            event.type === "node.completed" && event.nodeId === "work",
+        ),
+    ).toHaveLength(1);
+    persisted.close();
   });
 });

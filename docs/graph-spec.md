@@ -1,7 +1,7 @@
 # GraphSpec
 
 GraphSpec is authored as JSON. Start, Join, and End are structural and
-auto-complete. Task and Decision are the only claimable node types.
+auto-complete. Task and Decision are the only assignable node types.
 
 ```json
 {
@@ -77,7 +77,8 @@ auto-complete. Task and Decision are the only claimable node types.
 ```
 
 Omitted prompt arrays, `actorHint`, `tags`, and `maxAttempts` receive normalized
-defaults during validation.
+defaults during validation. `actorHint` affects scheduler ranking but does not
+restrict ownership.
 
 ## Invariants
 

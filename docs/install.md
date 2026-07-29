@@ -9,7 +9,7 @@ second JavaScript runtime.
 Prerequisite: Bun 1.2.17 or newer.
 
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.1.tgz
+bun add --global ./burn-graph-0.1.0-dev.2.tgz
 burn-graph --version
 ```
 
@@ -24,7 +24,7 @@ bun run install:local
 ```
 
 `install:local` builds the CLI and Viewer, creates
-`dist/releases/burn-graph-0.1.0-dev.1.tgz`, and installs that exact archive.
+`dist/releases/burn-graph-0.1.0-dev.2.tgz`, and installs that exact archive.
 
 An isolated prefix is available for clean-room checks:
 
@@ -35,7 +35,7 @@ bun scripts/install/local.ts --prefix /tmp/burn-graph-install
 ```
 
 The isolated installer test verifies package size, zero package dependencies,
-parallel CLI nodes, persisted state, packaged Viewer health, and read-only HTTP
-behavior. `--prefix` and `BUN_INSTALL` must resolve outside the source
-repository because Bun 1.2.17 may otherwise treat the source manifest as the
-global install target.
+parallel Assignment scheduling, persisted state, packaged Viewer lifecycle,
+and read-only HTTP behavior. `--prefix` and `BUN_INSTALL` must resolve outside
+the source repository because Bun 1.2.17 may otherwise treat the source
+manifest as the global install target.

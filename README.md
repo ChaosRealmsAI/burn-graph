@@ -1,16 +1,16 @@
 # burn-graph
 
 `burn-graph` is a project-local CLI for AI-owned prompt graphs. An AI creates a
-graph, claims ready nodes, reads the returned assignment packet, performs work
-with its own tools, and reports results. The graph records progress and
-convergence without knowing which model or execution harness did the work.
+graph, receives guarded prompt Assignments, performs work with its own tools,
+and reports results through opaque Assignment IDs. The runtime automatically
+unlocks and returns successors across parallel nodes and multiple graphs.
 
 ## Install
 
 With Bun 1.2.17 or newer, installation is one local package command:
 
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.1.tgz
+bun add --global ./burn-graph-0.1.0-dev.2.tgz
 burn-graph --version
 ```
 
@@ -23,17 +23,23 @@ repository, run `bun run install:local`.
 ```bash
 burn-graph init
 burn-graph graph apply --input graph.json
-burn-graph run start delivery
-burn-graph work ready --all
-burn-graph work claim delivery implement-core --actor main
-burn-graph work complete delivery implement-core --actor main --input result.json
-burn-graph serve --open
+burn-graph run start delivery --actor main
+# Execute every returned Assignment prompt, then:
+burn-graph done --assignment <id> --input result.json
+# Done returns the next zero or more Assignments automatically.
+burn-graph current --actor main
+burn-graph inspect overview
+burn-graph viewer start delivery --port 4173 --open
 ```
 
 Graph specifications are inspectable JSON, runtime state is transactional
 SQLite, and the human surface is a local read-only Mermaid viewer.
 Applied definitions live in `.burn-graph/graphs/` and can be versioned;
 ephemeral SQLite state stays ignored beneath `.burn-graph/runtime/`.
+
+Every bounded command, including Help, version, and errors, returns a stable
+JSON envelope. Start with `burn-graph --help` or
+`burn-graph help ai-loop`.
 
 See [installation](docs/install.md), [the CLI contract](docs/cli.md), and the
 [GraphSpec reference](docs/graph-spec.md).

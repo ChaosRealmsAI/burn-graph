@@ -15,4 +15,10 @@ Feature: Read-only live graph overview
   Scenario: Browser cannot mutate state
     Given the Viewer is running
     When a client uses every documented HTTP route
-    Then no route can create, claim, complete, fail, or delete graph state
+    Then no route can create, schedule, complete, fail, or delete graph state
+
+  Scenario: Named Viewer lifecycle owns one exact process
+    Given two Viewer names use distinct loopback ports
+    When the operator starts, checks, and stops one name
+    Then health is reported only for its recorded PID
+    And the other process is not signalled

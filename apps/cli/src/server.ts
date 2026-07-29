@@ -201,8 +201,9 @@ export async function startViewerServer(
   const url = `http://${options.host}:${server.port}`;
   process.stdout.write(
     `${JSON.stringify({
+      schemaVersion: 1,
       ok: true,
-      command: "serve",
+      command: "__viewer-serve",
       data: {
         url,
         projectId: service.config.projectId,

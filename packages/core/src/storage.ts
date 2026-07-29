@@ -76,6 +76,7 @@ export class BurnGraphDatabase {
         title TEXT NOT NULL,
         status TEXT NOT NULL,
         attempt INTEGER NOT NULL,
+        assignment_id TEXT,
         actor_id TEXT,
         lease_expires_at TEXT,
         heartbeat_at TEXT,
@@ -111,6 +112,7 @@ export class BurnGraphDatabase {
         node_id TEXT NOT NULL,
         attempt INTEGER NOT NULL,
         status TEXT NOT NULL,
+        assignment_id TEXT,
         actor_id TEXT,
         result_json TEXT,
         checkpoint_json TEXT,
@@ -146,5 +148,47 @@ export class BurnGraphDatabase {
           REFERENCES node_runs(run_id, node_id) ON DELETE CASCADE
       );
     `);
+
+    this.ensureColumn("node_runs", "assignment_id", "TEXT");
+    this.ensureColumn("attempts", "assignment_id", "TEXT");
+
+    const active = this.db
+      .query(
+        `SELECT n.run_id, n.node_id, n.attempt
+           FROM node_runs n
+          WHERE n.status = 'running' AND n.assignment_id IS NULL`,
+      )
+      .all() as Array<{ run_id: string; node_id: string; attempt: number }>;
+    for (const row of active) {
+      const assignmentId = crypto.randomUUID();
+      this.db
+        .query(
+          `UPDATE node_runs
+              SET assignment_id = ?
+            WHERE run_id = ? AND node_id = ?`,
+        )
+        .run(assignmentId, row.run_id, row.node_id);
+      this.db
+        .query(
+          `UPDATE attempts
+              SET assignment_id = ?
+            WHERE run_id = ? AND node_id = ? AND attempt = ?`,
+        )
+        .run(assignmentId, row.run_id, row.node_id, row.attempt);
+    }
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS attempts_assignment_idx
+        ON attempts(assignment_id)
+        WHERE assignment_id IS NOT NULL;
+    `);
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((candidate) => candidate.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+    }
   }
 }

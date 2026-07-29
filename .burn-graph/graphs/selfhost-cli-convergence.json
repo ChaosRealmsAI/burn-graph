@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-cli-convergence",
+  "title": "Converge the guarded burn-graph CLI",
+  "goal": "Verify Assignment scheduling, public command behavior, documentation, and one explicit repair loop before accepting v0.1.0-dev.2.",
+  "revision": 1,
+  "maxActive": 3,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start CLI convergence",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "scheduler-contract"
+        },
+        {
+          "to": "cli-blackbox"
+        },
+        {
+          "to": "docs-contract"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "scheduler-contract",
+      "type": "task",
+      "title": "Verify Assignment scheduler",
+      "prompt": {
+        "objective": "Verify guarded Assignment identity, automatic successor scheduling, fairness, concurrency, and idempotent completion.",
+        "instructions": [
+          "Use focused integration tests and inspect the real service diff.",
+          "Treat duplicate Assignment creation or cross-Graph mutation as blockers."
+        ],
+        "mustRead": [
+          "packages/core/src/service.ts",
+          "tests/integration/service.test.ts",
+          "tests/integration/cli-concurrency.test.ts"
+        ],
+        "doneWhen": [
+          "Focused scheduler and concurrency tests pass.",
+          "One Actor can receive parallel work from multiple Runs without direct node selection.",
+          "Equivalent completion replay is idempotent and conflicting replay fails."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "core",
+        "scheduler"
+      ]
+    },
+    {
+      "id": "cli-blackbox",
+      "type": "task",
+      "title": "Replay the public CLI loop",
+      "prompt": {
+        "objective": "Replay Help, Start, Next, Current, Focus, Done, inspection, recovery, loops, and removed-command failures through the public CLI.",
+        "instructions": [
+          "Use only public CLI commands for runtime mutations.",
+          "Verify returned packets contain the prompt and exact return protocol.",
+          "Capture bounded machine-readable evidence."
+        ],
+        "mustRead": [
+          "docs/cli.md",
+          "tests/e2e/cli-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "The CLI E2E passes.",
+          "A repair route returns Attempt 2 with prior Decision context.",
+          "Legacy public commands are rejected."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "cli",
+        "blackbox"
+      ]
+    },
+    {
+      "id": "docs-contract",
+      "type": "task",
+      "title": "Align public contracts",
+      "prompt": {
+        "objective": "Verify product, BDD, architecture, Help, and user documentation describe the same guarded CLI.",
+        "instructions": [
+          "Search for superseded commands outside historical dev.1 evidence.",
+          "Keep the normal AI loop short and recovery exceptional."
+        ],
+        "mustRead": [
+          "README.md",
+          "privacy/spec/product.md",
+          "privacy/spec/architecture.md"
+        ],
+        "doneWhen": [
+          "Current documentation contains no executable legacy command.",
+          "Progressive Help describes every public command.",
+          "Assignment and Viewer boundaries are explicit."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "contracts",
+        "docs"
+      ]
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "title": "Converge CLI evidence",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "quality-gate"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "quality-gate",
+      "type": "decision",
+      "title": "Accept or repair the CLI",
+      "prompt": {
+        "objective": "Choose pass only when the converged public CLI satisfies every M02 exit gate.",
+        "instructions": [
+          "Use real tests, Help output, dogfood state, and the final diff.",
+          "Route repair for any confirmed public-loop blocker."
+        ],
+        "mustRead": [
+          "privacy/spec/milestones/M02-cli-convergence.md",
+          "privacy/spec/project.json"
+        ],
+        "doneWhen": [
+          "Exactly one declared route is returned with concrete evidence."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "all CLI gates pass"
+        },
+        {
+          "to": "cli-blackbox",
+          "route": "repair",
+          "label": "repair public CLI",
+          "maxTraversals": 1
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "decision",
+        "quality"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "CLI converged",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

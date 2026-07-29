@@ -10,9 +10,9 @@ burn-graph source checkout, package dependencies, or container runtime.
 The user runs one Bun global package command against the archive. The
 `burn-graph` executable becomes available on Bun's global bin path. From an
 unrelated empty project, the user checks the version, initializes state,
-applies a GraphSpec, starts it, and claims parallel nodes from separate CLI
-processes. The installed command serves the Viewer using assets carried inside
-the same package.
+applies a GraphSpec, starts it, and receives parallel Assignments safely from
+separate CLI processes. The installed command starts, checks, and stops a named
+Viewer using assets carried inside the same package.
 
 ## Variants and recovery
 

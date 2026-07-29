@@ -58,6 +58,7 @@ export function initializeProject(rootInput: string, now: string): ProjectConfig
     projectId,
     createdAt: now,
     defaultLeaseSeconds: 900,
+    maxAssignmentsPerActor: 8,
   };
   atomicWriteJson(configFile, config);
   writeFileSync(path.join(stateRoot, ".gitignore"), "runtime/\n", {
@@ -90,11 +91,22 @@ export function readProjectConfig(root: string): ProjectConfig {
     parsed.schemaVersion !== 1 ||
     typeof parsed.projectId !== "string" ||
     typeof parsed.createdAt !== "string" ||
-    typeof parsed.defaultLeaseSeconds !== "number"
+    typeof parsed.defaultLeaseSeconds !== "number" ||
+    (parsed.maxAssignmentsPerActor !== undefined &&
+      (typeof parsed.maxAssignmentsPerActor !== "number" ||
+        !Number.isInteger(parsed.maxAssignmentsPerActor) ||
+        parsed.maxAssignmentsPerActor < 1 ||
+        parsed.maxAssignmentsPerActor > 32))
   ) {
     throw new BurnGraphError("INVALID_CONFIG", `Invalid config at ${file}`);
   }
-  return parsed as ProjectConfig;
+  return {
+    schemaVersion: 1,
+    projectId: parsed.projectId,
+    createdAt: parsed.createdAt,
+    defaultLeaseSeconds: parsed.defaultLeaseSeconds,
+    maxAssignmentsPerActor: parsed.maxAssignmentsPerActor ?? 8,
+  };
 }
 
 export function graphFile(root: string, graphId: string): string {

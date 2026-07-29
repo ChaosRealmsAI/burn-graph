@@ -8,8 +8,8 @@
     },
     {
       "id": "P02",
-      "statement": "The CLI is the only supported writer.",
-      "test": "Every mutation passes schema, revision, transaction, and event gates."
+      "statement": "The guarded CLI is the only supported writer.",
+      "test": "Every mutation passes Assignment identity, schema, revision, transaction, and event gates."
     },
     {
       "id": "P03",
