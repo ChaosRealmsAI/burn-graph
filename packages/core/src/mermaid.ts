@@ -141,7 +141,7 @@ export function renderTreeMermaid(entries: readonly RunTreeEntry[]): string {
       const descendants =
         entry.descendantRuns > 0 ? ` · +${entry.descendantRuns}` : "";
       const label = escapeLabel(
-        `${summary.status} · ${runProgress(entry)}${descendants} · ${entry.label ?? summary.title}`,
+        `${summary.status} · ${summary.priority} · ${runProgress(entry)}${descendants} · ${entry.label ?? summary.title}`,
       );
       lines.push(
         `  ${foldedRunId(summary.runId)}["${label}"]:::${statusClass(summary.status)}`,
@@ -150,7 +150,7 @@ export function renderTreeMermaid(entries: readonly RunTreeEntry[]): string {
     }
 
     const runLabel = escapeLabel(
-      `${summary.status} · ${runProgress(entry)} · ${entry.label ?? summary.title} · ${summary.runId}`,
+      `${summary.status} · ${summary.priority} · ${runProgress(entry)} · ${entry.label ?? summary.title} · ${summary.runId}`,
     );
     lines.push(`  subgraph g_${Buffer.from(summary.runId).toString("hex")}["${runLabel}"]`);
     lines.push("    direction LR");

@@ -480,7 +480,10 @@ export class BurnGraphService extends BurnGraphServiceBase {
       .all(...runIds) as Row[];
     return rows.map((row) => ({
       resource: stringValue(row, "resource"),
-      ownerKind: "gate",
+      ownerKind: stringValue(
+        row,
+        "owner_kind",
+      ) as ResourceLockSummary["ownerKind"],
       ownerId: stringValue(row, "owner_id"),
       rootRunId: stringValue(row, "root_run_id"),
       runId: stringValue(row, "run_id"),

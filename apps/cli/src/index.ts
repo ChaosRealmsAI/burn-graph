@@ -12,6 +12,7 @@ import {
   validateGraphSpec,
   type GraphStatus,
   type NodeStatus,
+  type RunPriority,
   type RuntimeChange,
   type WorkSchedule,
 } from "@burn-graph/core";
@@ -22,6 +23,11 @@ import {
   type RenderScope,
 } from "@burn-graph/render";
 import { SystemNodeDriver } from "@burn-graph/system-driver";
+import {
+  generateTemplate,
+  listTemplates,
+  showTemplate,
+} from "@burn-graph/templates";
 import { Command, Option } from "commander";
 import { ZodError } from "zod";
 
@@ -32,7 +38,7 @@ import {
   viewerInstanceStatus,
 } from "./viewer-runtime.ts";
 
-const VERSION = "0.1.0-dev.6";
+const VERSION = "0.1.0-dev.7";
 const GRAPH_STATUSES: readonly GraphStatus[] = [
   "draft",
   "running",
@@ -407,6 +413,71 @@ graph
     });
   });
 
+const template = group(
+  "template",
+  "inspect and instantiate immutable package workflow templates",
+);
+
+template
+  .command("list")
+  .description("list the six immutable package template descriptors")
+  .action(() => {
+    success("template.list", {
+      schemaVersion: 1,
+      templates: listTemplates(),
+      count: listTemplates().length,
+    }, {
+      nextActions: [{
+        id: "show-template",
+        command: "burn-graph template show <template>",
+        description: "Inspect one bounded input contract.",
+      }],
+    });
+  });
+
+template
+  .command("show")
+  .description("show one package template and its bounded input contract")
+  .argument("<template>", "package template ID")
+  .action((templateId: string) => {
+    success("template.show", showTemplate(templateId), {
+      nextActions: [{
+        id: "instantiate-template",
+        command:
+          `burn-graph template instantiate ${templateId} --input template-input.json`,
+        description: "Generate and atomically register the local Graph revision.",
+      }],
+    });
+  });
+
+template
+  .command("instantiate")
+  .description("atomically generate and register one package template")
+  .argument("<template>", "package template ID")
+  .requiredOption("--input <file>", "JSON file or - for stdin")
+  .option("--idempotency-key <key>", "stable retry key")
+  .action(async (
+    templateId: string,
+    options: { input: string; idempotencyKey?: string },
+  ) => {
+    const generation = generateTemplate(
+      templateId,
+      await readJsonInput(options.input),
+      options.idempotencyKey,
+    );
+    const receipt = withService((service) =>
+      service.instantiateTemplate(generation),
+    );
+    success("template.instantiate", receipt, {
+      nextActions: receipt.graphs.map((graphReceipt) => ({
+        id: `start:${graphReceipt.graphId}`,
+        command:
+          `burn-graph run start ${graphReceipt.graphId} --actor primary`,
+        description: "Start the generated Graph and receive its first prompt.",
+      })),
+    });
+  });
+
 const check = group("check", "author immutable registered machine Checks");
 
 check
@@ -560,6 +631,41 @@ run
     });
   });
 
+run
+  .command("priority")
+  .description("set one root Run priority idempotently")
+  .argument("<run-or-graph>")
+  .addOption(
+    new Option("--value <priority>", "root scheduling priority")
+      .choices(["low", "normal", "high"])
+      .makeOptionMandatory(),
+  )
+  .requiredOption("--idempotency-key <key>", "stable retry key")
+  .action((
+    reference: string,
+    options: { value: RunPriority; idempotencyKey: string },
+  ) => {
+    const result = withService((service) =>
+      service.setRunPriority(
+        reference,
+        options.value,
+        options.idempotencyKey,
+      ),
+    );
+    success(
+      "run.priority",
+      { ...result.value, replayed: result.replayed },
+      {
+        changes: result.changes ?? mutationChange(result),
+        nextActions: [{
+          id: "next",
+          command: "burn-graph next --actor primary",
+          description: "Schedule eligible roots under the updated priority.",
+        }],
+      },
+    );
+  });
+
 program
   .command("next")
   .description("resume and automatically fill one Actor's Assignment slots")
@@ -672,7 +778,10 @@ program
           ? { projectionDepth: options.depth }
           : {}),
       });
-      success("render", data, {
+      success("render", {
+        ...data,
+        projection: projection.tree,
+      }, {
         nextActions: [
           {
             id: "inspect-run",
@@ -776,6 +885,12 @@ inspect
   .command("overview")
   .description("show filtered multi-Graph progress and actionable nodes")
   .option("--graph <run-or-graph>", "filter one Run")
+  .option("--root-run <run-or-graph>", "filter one complete root Run tree")
+  .option(
+    "--depth <count>",
+    "filter exact hierarchy depth",
+    boundedNonNegativeInteger(8),
+  )
   .addOption(
     new Option("--run-status <status>", "filter Run status").choices([
       ...GRAPH_STATUSES,
@@ -784,87 +899,47 @@ inspect
   .option("--node-status <statuses>", "comma-separated Node statuses")
   .option("--actor <id>", "filter Node owner")
   .option("--tag <tag>", "filter GraphSpec Node tag")
+  .option("--resource <name>", "filter declared or owned exclusive resource")
+  .addOption(
+    new Option(
+      "--priority <priority>",
+      "filter configured root priority",
+    ).choices(["low", "normal", "high"]),
+  )
   .option("--limit <count>", "maximum node rows", boundedInteger(1_000), 50)
   .action(
     (options: {
       graph?: string;
+      rootRun?: string;
+      depth?: number;
       runStatus?: GraphStatus;
       nodeStatus?: string;
       actor?: string;
       tag?: string;
+      resource?: string;
+      priority?: RunPriority;
       limit: number;
     }) => {
-      const data = withService((service) => {
-        const project = service.projectSnapshot();
-        const selectedRunId = options.graph
-          ? service.getSnapshot(options.graph, 0).summary.runId
-          : null;
-        const runs = project.runs.filter(
-          (candidate) =>
-            (selectedRunId === null || candidate.runId === selectedRunId) &&
-            (options.runStatus === undefined ||
-              candidate.status === options.runStatus),
-        );
-        const explicitStatuses = parseNodeStatuses(options.nodeStatus);
-        const defaultStatuses: readonly NodeStatus[] = [
-          "ready",
-          "running",
-          "blocked",
-          "failed",
-        ];
-        const statuses = explicitStatuses ?? defaultStatuses;
-        const nodes = runs
-          .flatMap((summary) => {
-            const snapshot = service.getSnapshot(summary.runId, 0);
-            return snapshot.nodes
-              .filter((node) => statuses.includes(node.status))
-              .filter(
-                (node) =>
-                  options.actor === undefined || node.actorId === options.actor,
-              )
-              .filter((node) => {
-                if (options.tag === undefined) return true;
-                return (
-                  snapshot.spec.nodes
-                    .find((spec) => spec.id === node.id)
-                    ?.tags.includes(options.tag) ?? false
-                );
-              })
-              .map((node) => ({
-                runId: summary.runId,
-                graphId: summary.graphId,
-                nodeId: node.id,
-                type: node.type,
-                title: node.title,
-                status: node.status,
-                attempt: node.attempt,
-                assignmentId: node.assignmentId,
-                actorId: node.actorId,
-                updatedAt: node.updatedAt,
-              }));
-          })
-          .slice(0, options.limit);
-        return {
-          projectId: project.projectId,
-          capturedAt: project.capturedAt,
-          filters: {
-            graph: options.graph ?? null,
-            runStatus: options.runStatus ?? null,
-            nodeStatuses: statuses,
-            actor: options.actor ?? null,
-            tag: options.tag ?? null,
-            limit: options.limit,
-          },
-          totals: {
-            graphs: project.graphs.length,
-            runs: runs.length,
-            listedNodes: nodes.length,
-          },
-          runs,
-          nodes,
-          lastEventSequence: project.lastEventSequence,
-        };
-      });
+      const defaultStatuses: readonly NodeStatus[] = [
+        "ready",
+        "running",
+        "blocked",
+        "failed",
+      ];
+      const data = withService((service) =>
+        service.inspectOverview({
+          ...(options.graph ? { run: options.graph } : {}),
+          ...(options.rootRun ? { root: options.rootRun } : {}),
+          ...(options.depth !== undefined ? { depth: options.depth } : {}),
+          ...(options.runStatus ? { runStatus: options.runStatus } : {}),
+          nodeStatuses: parseNodeStatuses(options.nodeStatus) ?? defaultStatuses,
+          ...(options.actor ? { actor: options.actor } : {}),
+          ...(options.tag ? { tag: options.tag } : {}),
+          ...(options.resource ? { resource: options.resource } : {}),
+          ...(options.priority ? { priority: options.priority } : {}),
+          limit: options.limit,
+        }),
+      );
       success("inspect.overview", data);
     },
   );
@@ -975,7 +1050,7 @@ inspect
 
 inspect
   .command("resources")
-  .description("list current exclusive System Node resource ownership")
+  .description("list current exclusive Assignment and Gate resource ownership")
   .argument("[run-or-graph]")
   .option("--limit <count>", "maximum rows", boundedInteger(1_000), 100)
   .action((reference: string | undefined, options: { limit: number }) => {
@@ -984,6 +1059,17 @@ inspect
       withService((service) =>
         service.listResourceLocks(reference).slice(0, options.limit),
       ),
+    );
+  });
+
+inspect
+  .command("metrics")
+  .description("derive bounded portfolio metrics without private text or mutation")
+  .argument("[run-or-graph]")
+  .action((reference?: string) => {
+    success(
+      "inspect.metrics",
+      withService((service) => service.inspectMetrics(reference)),
     );
   });
 
@@ -1470,6 +1556,31 @@ const helpDetails = new Map<string, HelpDetail>([
   ["graph.list", { mutates: false }],
   ["graph.show", { mutates: false }],
   ["graph.clone", { mutates: true, next: ["run.start"] }],
+  ["template", { mutates: false }],
+  ["template.list", { mutates: false, next: ["template.show"] }],
+  ["template.show", { mutates: false, next: ["template.instantiate"] }],
+  [
+    "template.instantiate",
+    {
+      mutates: true,
+      input: {
+        schemaVersion: 1,
+        graphId: "new project-local Graph ID",
+        goal: "bounded workflow outcome",
+        idempotencyKey: "input field or --idempotency-key",
+      },
+      output: "atomic TemplateInstantiationReceipt",
+      errors: [
+        "TEMPLATE_NOT_FOUND",
+        "TEMPLATE_GRAPH_EXISTS",
+        "TEMPLATE_STAGE_NOT_SUPPORTED",
+        "TEMPLATE_OVERRIDE_NODE_NOT_FOUND",
+        "CHECK_NOT_FOUND",
+        "IDEMPOTENCY_KEY_CONFLICT",
+      ],
+      next: ["run.start"],
+    },
+  ],
   ["check", { mutates: false }],
   ["check.validate", { mutates: false, input: "CheckSpec JSON" }],
   ["check.apply", { mutates: true, input: "CheckSpec JSON", next: ["graph.apply"] }],
@@ -1509,6 +1620,22 @@ const helpDetails = new Map<string, HelpDetail>([
       errors: ["INVALID_RUN_STATE", "IDEMPOTENCY_KEY_CONFLICT"],
     },
   ],
+  [
+    "run.priority",
+    {
+      mutates: true,
+      input: {
+        value: "low | normal | high",
+        idempotencyKey: "required stable retry key",
+      },
+      errors: [
+        "PRIORITY_ROOT_REQUIRED",
+        "INVALID_RUN_STATE",
+        "IDEMPOTENCY_KEY_CONFLICT",
+      ],
+      next: ["next"],
+    },
+  ],
   ["next", { mutates: true, output: "WorkSchedule with AssignmentPacket[]" }],
   ["current", { mutates: false, output: "Actor focus and complete AssignmentPacket[]" }],
   [
@@ -1516,7 +1643,7 @@ const helpDetails = new Map<string, HelpDetail>([
     {
       mutates: false,
       output:
-        "Cached SVG or PNG metadata with project-relative artifact, hash, dimensions, revision, and renderer versions",
+        "Cached SVG or PNG metadata plus the canonical tree projection when requested",
       errors: [
         "RUN_NOT_FOUND",
         "RENDERER_UNAVAILABLE",
@@ -1574,6 +1701,13 @@ const helpDetails = new Map<string, HelpDetail>([
   ["inspect.ready", { mutates: false, next: ["next"] }],
   ["inspect.waits", { mutates: false }],
   ["inspect.resources", { mutates: false }],
+  [
+    "inspect.metrics",
+    {
+      mutates: false,
+      output: "bounded operational metrics excluding private text and output",
+    },
+  ],
   ["inspect.executions", { mutates: false }],
   ["inspect.mermaid", { mutates: false, output: "{ source: Mermaid string }" }],
   ["inspect.events", { mutates: false, output: "JSON envelope or JSONL stream" }],
@@ -1640,7 +1774,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     ],
     commands: ["graph validate", "graph apply", "graph show"],
     executionAvailability: {
-      "0.1.0-dev.6":
+      "0.1.0-dev.7":
         "Subgraph, registered Gate, and durable Wait execute through the bounded System Node Driver.",
     },
   },
@@ -1650,6 +1784,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "run pause <run> --idempotency-key <key>",
       "run resume <run> --actor <actor> --idempotency-key <new-key>",
       "run cancel <run> --idempotency-key <new-key>",
+      "run priority <root-run> --value low|normal|high --idempotency-key <new-key>",
     ],
     invariants: [
       "Pause suppresses new descendant work while existing Assignment handles settle.",
@@ -1667,9 +1802,32 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "inspect ready",
       "inspect waits",
       "inspect resources",
+      "inspect metrics",
       "inspect executions",
       "inspect mermaid",
       "inspect events",
+    ],
+  },
+  templates: {
+    title: "Immutable package workflow templates",
+    templates: [
+      "delivery",
+      "vertical-slice",
+      "poc",
+      "bugfix",
+      "review-repair",
+      "release",
+    ],
+    sequence: [
+      "burn-graph template list",
+      "burn-graph template show <template>",
+      "burn-graph template instantiate <template> --input template-input.json",
+      "burn-graph run start <generated-graph> --actor <actor>",
+    ],
+    invariants: [
+      "All generated GraphSpecs and Check references validate before write.",
+      "One idempotency key owns one immutable normalized result.",
+      "Invalid input leaves no file or registered Graph revision.",
     ],
   },
   render: {
@@ -1835,7 +1993,7 @@ function helpPayload(
             "burn-graph done --assignment <id> --input -",
           ],
           groups: {
-            author: ["init", "graph"],
+            author: ["init", "graph", "template"],
             execute: ["check", "run", "next", "current", "focus", "done", "signal"],
             observe: ["inspect", "render", "viewer"],
             recover: ["recover", "doctor"],

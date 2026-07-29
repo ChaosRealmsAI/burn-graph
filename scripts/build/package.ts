@@ -23,6 +23,13 @@ interface SourcePackage {
 const repositoryRoot = path.resolve(import.meta.dir, "../..");
 const cliFile = path.join(repositoryRoot, "dist", "burn-graph.js");
 const viewerDirectory = path.join(repositoryRoot, "dist", "viewer");
+const templateCatalogFile = path.join(
+  repositoryRoot,
+  "packages",
+  "templates",
+  "assets",
+  "catalog.json",
+);
 const sourcePackage = JSON.parse(
   readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
 ) as SourcePackage;
@@ -32,6 +39,9 @@ if (typeof sourcePackage.version !== "string") {
 }
 if (!existsSync(cliFile) || !existsSync(path.join(viewerDirectory, "index.html"))) {
   throw new Error("Run the CLI and Viewer builds before packaging");
+}
+if (!existsSync(templateCatalogFile)) {
+  throw new Error("Package template catalog is missing");
 }
 
 const temporaryRoot = path.join(repositoryRoot, ".tmp", "package");
@@ -67,6 +77,11 @@ try {
   cpSync(viewerDirectory, path.join(stagingRoot, "viewer"), {
     recursive: true,
   });
+  mkdirSync(path.join(stagingRoot, "templates"), { recursive: true });
+  copyFileSync(
+    templateCatalogFile,
+    path.join(stagingRoot, "templates", "catalog.json"),
+  );
   copyFileSync(
     path.join(repositoryRoot, "README.md"),
     path.join(stagingRoot, "README.md"),

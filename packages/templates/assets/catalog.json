@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "templates": [
+    {
+      "id": "delivery",
+      "title": "Delivery",
+      "summary": "Plan a delivery, create bounded vertical-slice children, converge optional risk work, verify, and review.",
+      "stages": ["plan", "dynamic-slices", "risk-work", "integrate", "gate", "review"],
+      "supports": ["poc", "security", "performance", "release"]
+    },
+    {
+      "id": "vertical-slice",
+      "title": "Vertical slice",
+      "summary": "Lock one user result, implement it end to end, self-verify, blackbox, and review.",
+      "stages": ["contract", "implement", "self-verify", "blackbox", "gate", "review"],
+      "supports": ["security", "performance"]
+    },
+    {
+      "id": "poc",
+      "title": "Proof of concept",
+      "summary": "Frame one decision-changing unknown, run the smallest experiment, verify the oracle, and decide.",
+      "stages": ["frame", "experiment", "verify", "gate", "review"],
+      "supports": []
+    },
+    {
+      "id": "bugfix",
+      "title": "Bug fix",
+      "summary": "Reproduce a defect, repair the smallest boundary, regress the public path, and review.",
+      "stages": ["reproduce", "repair", "regression", "gate", "review"],
+      "supports": ["poc"]
+    },
+    {
+      "id": "review-repair",
+      "title": "Review repair",
+      "summary": "Inspect evidence-backed findings, repair accepted issues, verify them independently, and review.",
+      "stages": ["inspect", "repair", "verify", "gate", "review"],
+      "supports": ["security", "performance"]
+    },
+    {
+      "id": "release",
+      "title": "Release",
+      "summary": "Freeze scope, run full regression, package one artifact, pass the release gate, and decide.",
+      "stages": ["scope", "regression", "package", "gate", "review"],
+      "supports": ["performance"]
+    }
+  ]
+}

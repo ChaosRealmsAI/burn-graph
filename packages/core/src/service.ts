@@ -9,6 +9,7 @@ import {
   IdempotencyKeySchema,
   IdentifierSchema,
   NodeStatusSchema,
+  RunPrioritySchema,
   type ActorWork,
   type AssignmentPacket,
   type CheckSpec,
@@ -25,6 +26,9 @@ import {
   type GraphTreeSnapshot,
   type IdempotentMutationResult,
   type MutationResult,
+  type PortfolioOverview,
+  type PortfolioOverviewNode,
+  type PortfolioOverviewOptions,
   type PortfolioRun,
   type ProjectConfig,
   type ReadyWork,
@@ -32,9 +36,14 @@ import {
   type RuntimeChange,
   type RuntimeEdge,
   type RuntimeNode,
+  type RuntimeMetrics,
+  type RunPriority,
+  type TemplateInstantiationReceipt,
+  type TemplateInstantiationRequest,
   type WorkSchedule,
 } from "./contracts.ts";
-import { validateCheckSpec } from "./gate.ts";
+import { gateResources, validateCheckSpec } from "./gate.ts";
+import { deriveRuntimeMetrics } from "./metrics.ts";
 import { renderMermaid, renderTreeMermaid } from "./mermaid.ts";
 import {
   discoverProjectRoot,
@@ -52,7 +61,15 @@ import {
   stringValue,
   type Row,
 } from "./sql.ts";
+import {
+  effectivePriority,
+  orderReadyWork,
+} from "./scheduler.ts";
 import { BurnGraphDatabase } from "./storage.ts";
+import {
+  recoverTemplateTransactions,
+  TemplateRegistry,
+} from "./template-service.ts";
 import {
   loopBodyNodeIds,
   validateGraphSpec,
@@ -79,7 +96,11 @@ interface AssignmentExpectation {
   readonly attempt: number;
 }
 
-type LifecycleOperation = "pause" | "resume" | "cancel";
+type LifecycleOperation =
+  | "pause"
+  | "resume"
+  | "cancel"
+  | `priority:${RunPriority}`;
 
 type ResumeContinuation = WorkSchedule & {
   readonly resumed: GraphSummary;
@@ -137,6 +158,20 @@ function isAssignableNode(
   );
 }
 
+function resourceEligibility(
+  resources: readonly string[],
+  lockedResources: ReadonlySet<string>,
+): ReadyWork["eligibility"] {
+  const blockedResources = resources.filter((resource) =>
+    lockedResources.has(resource)
+  );
+  return {
+    eligible: blockedResources.length === 0,
+    reason: blockedResources.length === 0 ? null : "RESOURCE_BUSY",
+    blockedResources,
+  };
+}
+
 export interface BurnGraphServiceOptions {
   readonly now?: () => Date;
 }
@@ -152,6 +187,7 @@ export class BurnGraphServiceBase {
     this.config = readProjectConfig(this.root);
     this.database = new BurnGraphDatabase(this.root);
     this.now = options.now ?? (() => new Date());
+    recoverTemplateTransactions(this.root, this.database);
   }
 
   close(): void {
@@ -208,6 +244,21 @@ export class BurnGraphServiceBase {
       throw error;
     }
     return spec;
+  }
+
+  instantiateTemplate(
+    request: TemplateInstantiationRequest,
+  ): TemplateInstantiationReceipt {
+    return new TemplateRegistry({
+      root: this.root,
+      database: this.database,
+      timestamp: () => this.timestamp(),
+      validateGraph: (input) => this.validateGraph(input),
+      validateReferences: (spec) => {
+        this.validateCheckReferences(spec);
+        this.validateHierarchyReferences(spec);
+      },
+    }).instantiate(request);
   }
 
   private validateHierarchyReferences(spec: GraphSpec): void {
@@ -1095,6 +1146,13 @@ export class BurnGraphServiceBase {
         .run(at, ...ids);
       this.database.db
         .query(
+          `DELETE FROM resource_locks
+            WHERE owner_kind = 'assignment'
+              AND run_id IN (${placeholders})`,
+        )
+        .run(...ids);
+      this.database.db
+        .query(
           `UPDATE attempts
               SET status = 'cancelled', finished_at = ?
             WHERE run_id IN (${placeholders}) AND finished_at IS NULL
@@ -1191,6 +1249,64 @@ export class BurnGraphServiceBase {
     );
   }
 
+  setRunPriority(
+    reference: string,
+    value: RunPriority,
+    idempotencyKey: string,
+  ): IdempotentMutationResult<GraphSnapshot> {
+    const priority = RunPrioritySchema.parse(value);
+    const target = this.getSnapshot(reference, 0).summary;
+    if (target.parentRunId !== null) {
+      throw new BurnGraphError(
+        "PRIORITY_ROOT_REQUIRED",
+        `Run ${target.runId} is not a root Run`,
+        false,
+        { rootRunId: target.rootRunId },
+      );
+    }
+    return this.executeLifecycleMutation(
+      `priority:${priority}`,
+      reference,
+      idempotencyKey,
+      (runId, at) => {
+        const run = this.runRow(runId);
+        const status = GraphStatusSchema.parse(stringValue(run, "status"));
+        if (
+          !["running", "pausing", "paused", "cancelling"].includes(status)
+        ) {
+          throw new BurnGraphError(
+            "INVALID_RUN_STATE",
+            `Cannot change priority for ${runId} from ${status}`,
+          );
+        }
+        const previous = RunPrioritySchema.parse(
+          stringValue(run, "priority"),
+        );
+        this.database.db
+          .query(
+            `UPDATE runs
+                SET priority = ?, updated_at = ?
+              WHERE run_id = ?`,
+          )
+          .run(priority, at, runId);
+        const revision = this.bumpRun(runId, at);
+        const sequence = this.appendEvent({
+          runId,
+          graphId: stringValue(run, "graph_id"),
+          nodeId: null,
+          type: "run.priority_changed",
+          summary: `Changed ${runId} priority from ${previous} to ${priority}.`,
+          payload: { previous, priority, revision },
+          at,
+        });
+        return {
+          rootSequence: sequence,
+          changes: [{ revision, event: this.getEvent(sequence) }],
+        };
+      },
+    );
+  }
+
   listReady(graphReference?: string): readonly ReadyWork[] {
     const parameters: string[] = [];
     let filter = "";
@@ -1201,10 +1317,13 @@ export class BurnGraphServiceBase {
     }
     const rows = this.database.db
       .query(
-        `SELECT n.run_id, r.graph_id, n.node_id, n.node_type, n.title,
-                n.attempt, n.updated_at, s.document_json
+        `SELECT n.run_id, r.root_run_id, r.depth, root.priority,
+                root.scheduler_ready_at, r.graph_id, n.node_id,
+                n.node_type, n.title, n.attempt, n.updated_at,
+                s.document_json
            FROM node_runs n
            JOIN runs r ON r.run_id = n.run_id
+           JOIN runs root ON root.run_id = r.root_run_id
            JOIN graph_specs s
              ON s.graph_id = r.graph_id AND s.revision = r.spec_revision
           WHERE r.status = 'running'
@@ -1213,6 +1332,13 @@ export class BurnGraphServiceBase {
           ORDER BY n.updated_at, n.run_id, n.node_id`,
       )
       .all(...parameters) as Row[];
+    const lockedResources = new Set(
+      (
+        this.database.db
+          .query("SELECT resource FROM resource_locks ORDER BY resource")
+          .all() as Row[]
+      ).map((lock) => stringValue(lock, "resource")),
+    );
     const graphsByRun = new Map<string, ValidatedGraph>();
     return rows.flatMap((row) => {
       const runId = stringValue(row, "run_id");
@@ -1226,17 +1352,89 @@ export class BurnGraphServiceBase {
       const nodeId = stringValue(row, "node_id");
       const node = graph.nodesById.get(nodeId)!;
       if (!isAssignableNode(node)) return [];
+      const resources = node.resources ?? [];
+      const priority = RunPrioritySchema.parse(
+        stringValue(row, "priority"),
+      );
+      const readySince = stringValue(row, "scheduler_ready_at");
       return [{
         runId,
+        rootRunId: stringValue(row, "root_run_id"),
         graphId: stringValue(row, "graph_id"),
         nodeId,
         type: node.type,
         title: stringValue(row, "title"),
         actorHint: node.actorHint,
         attempt: numberValue(row, "attempt") + 1,
+        depth: numberValue(row, "depth"),
+        priority,
+        effectivePriority: effectivePriority(
+          priority,
+          readySince,
+          this.now(),
+        ),
+        readySince,
+        resources,
+        eligibility: resourceEligibility(resources, lockedResources),
         updatedAt: stringValue(row, "updated_at"),
       }];
     });
+  }
+
+  private listReadyResourceMetrics(): readonly Pick<
+    ReadyWork,
+    "runId" | "eligibility"
+  >[] {
+    const assignable = this.listReady().map((candidate) => ({
+      runId: candidate.runId,
+      eligibility: candidate.eligibility,
+    }));
+    const lockedResources = new Set(
+      (
+        this.database.db
+          .query("SELECT resource FROM resource_locks ORDER BY resource")
+          .all() as Row[]
+      ).map((lock) => stringValue(lock, "resource")),
+    );
+    const gateRows = this.database.db
+      .query(
+        `SELECT n.run_id, n.node_id, s.document_json
+           FROM node_runs n
+           JOIN runs r ON r.run_id = n.run_id
+           JOIN graph_specs s
+             ON s.graph_id = r.graph_id AND s.revision = r.spec_revision
+          WHERE r.status = 'running'
+            AND n.status = 'ready'
+            AND n.node_type = 'gate'
+          ORDER BY n.updated_at, n.run_id, n.node_id`,
+      )
+      .all() as Row[];
+    const graphsByRun = new Map<string, ValidatedGraph>();
+    const gates = gateRows.map((row) => {
+      const runId = stringValue(row, "run_id");
+      let graph = graphsByRun.get(runId);
+      if (!graph) {
+        graph = validateGraphSpec(
+          JSON.parse(stringValue(row, "document_json")),
+        );
+        graphsByRun.set(runId, graph);
+      }
+      const nodeId = stringValue(row, "node_id");
+      const node = graph.nodesById.get(nodeId);
+      if (!node || node.type !== "gate" || !node.check) {
+        throw new BurnGraphError(
+          "CORRUPT_STATE",
+          `${runId}/${nodeId} is not a valid ready Gate`,
+        );
+      }
+      const check = this.loadCheck(node.check.id, node.check.revision);
+      const resources = gateResources(node.resources ?? [], check.resources);
+      return {
+        runId,
+        eligibility: resourceEligibility(resources, lockedResources),
+      };
+    });
+    return [...assignable, ...gates];
   }
 
   claim(
@@ -1284,6 +1482,7 @@ export class BurnGraphServiceBase {
       ) {
         const staleAttempt = numberValue(row, "attempt");
         const staleActorId = optionalString(row, "actor_id");
+        const staleAssignmentId = optionalString(row, "assignment_id");
         this.database.db
           .query(
             `UPDATE attempts
@@ -1306,6 +1505,9 @@ export class BurnGraphServiceBase {
                 WHERE actor_id = ? AND run_id = ? AND node_id = ?`,
             )
             .run(staleActorId, runId, nodeId);
+        }
+        if (staleAssignmentId !== null) {
+          this.releaseAssignmentResources(staleAssignmentId);
         }
         recoveredExpiredAttempt = {
           attempt: staleAttempt,
@@ -1353,6 +1555,31 @@ export class BurnGraphServiceBase {
           true,
         );
       }
+      const resources = nodeSpec.resources ?? [];
+      if (resources.length > 0) {
+        const locks = this.database.db
+          .query(
+            `SELECT resource, owner_kind, owner_id
+               FROM resource_locks
+              WHERE resource IN (${resources.map(() => "?").join(", ")})
+              ORDER BY resource`,
+          )
+          .all(...resources) as Row[];
+        if (locks.length > 0) {
+          throw new BurnGraphError(
+            "RESOURCE_BUSY",
+            `Resources are unavailable for ${runId}/${nodeId}`,
+            true,
+            {
+              resources: locks.map((lock) => ({
+                resource: stringValue(lock, "resource"),
+                ownerKind: stringValue(lock, "owner_kind"),
+                ownerId: stringValue(lock, "owner_id"),
+              })),
+            },
+          );
+        }
+      }
       const attempt = numberValue(row, "attempt") + 1;
       const assignmentId = crypto.randomUUID();
       this.database.db
@@ -1381,6 +1608,24 @@ export class BurnGraphServiceBase {
            ) VALUES (?, ?, ?, 'running', ?, ?, NULL, NULL, NULL, ?, NULL)`,
         )
         .run(runId, nodeId, attempt, assignmentId, actorId, at);
+      for (const resource of resources) {
+        this.database.db
+          .query(
+            `INSERT INTO resource_locks (
+               resource, owner_kind, owner_id, root_run_id, run_id, node_id,
+               expires_at, created_at
+             ) VALUES (?, 'assignment', ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            resource,
+            assignmentId,
+            stringValue(run, "root_run_id"),
+            runId,
+            nodeId,
+            expiresAt,
+            at,
+          );
+      }
       this.database.db
         .query(
           `INSERT INTO actor_focus (actor_id, run_id, node_id, updated_at)
@@ -1391,6 +1636,13 @@ export class BurnGraphServiceBase {
              updated_at = excluded.updated_at`,
         )
         .run(actorId, runId, nodeId, at);
+      this.database.db
+        .query(
+          `UPDATE runs
+              SET scheduler_ready_at = ?
+            WHERE run_id = ?`,
+        )
+        .run(at, stringValue(run, "root_run_id"));
       const revision = this.bumpRun(runId, at, undefined, nodeId);
       return this.appendEvent({
         runId,
@@ -1403,6 +1655,7 @@ export class BurnGraphServiceBase {
           attempt,
           assignmentId,
           leaseExpiresAt: expiresAt,
+          resources,
           recoveredExpiredAttempt,
           revision,
         },
@@ -1448,6 +1701,16 @@ export class BurnGraphServiceBase {
             WHERE run_id = ? AND node_id = ?`,
         )
         .run(expiresAt, at, at, runId, nodeId);
+      const assignmentId = optionalString(row, "assignment_id");
+      if (assignmentId !== null) {
+        this.database.db
+          .query(
+            `UPDATE resource_locks
+                SET expires_at = ?
+              WHERE owner_kind = 'assignment' AND owner_id = ?`,
+          )
+          .run(expiresAt, assignmentId);
+      }
       const run = this.runRow(runId);
       const revision = this.bumpRun(runId, at);
       return this.appendEvent({
@@ -1595,6 +1858,7 @@ export class BurnGraphServiceBase {
         expectation,
       );
       const attempt = numberValue(node, "attempt");
+      const assignmentId = optionalString(node, "assignment_id");
       const run = this.runRow(runId);
       const normalizedChildren =
         dynamicChildren !== null && dynamicChildren.success
@@ -1641,6 +1905,9 @@ export class BurnGraphServiceBase {
           nodeId,
           attempt,
         );
+      if (assignmentId !== null) {
+        this.releaseAssignmentResources(assignmentId);
+      }
       this.database.db
         .query(
           "DELETE FROM actor_focus WHERE actor_id = ? AND run_id = ? AND node_id = ?",
@@ -1991,78 +2258,70 @@ export class BurnGraphServiceBase {
     let availableSlots =
       this.config.maxAssignmentsPerActor - assignments.length;
 
-    const runningRuns = this.listRuns()
-      .filter((run) => run.status === "running")
-      .sort((left, right) => {
-        if (left.runId === preferredRunId) return -1;
-        if (right.runId === preferredRunId) return 1;
-        return (
-          left.updatedAt.localeCompare(right.updatedAt) ||
-          left.runId.localeCompare(right.runId)
-        );
-      });
-    const candidates = [...this.listReady()].sort((left, right) => {
-      const actorRank = (candidate: ReadyWork): number =>
-        candidate.actorHint === actorId
-          ? 0
-          : candidate.actorHint === null
-            ? 1
-            : 2;
-      return (
-        actorRank(left) - actorRank(right) ||
-        left.updatedAt.localeCompare(right.updatedAt) ||
-        left.nodeId.localeCompare(right.nodeId)
-      );
-    });
     const saturatedRuns = new Set<string>();
+    const candidates = orderReadyWork(
+      this.listReady().filter((candidate) => candidate.eligibility.eligible),
+      actorId,
+      preferredRunId,
+    );
+    const rootOrder: string[] = [];
+    const candidatesByRoot = new Map<string, ReadyWork[]>();
+    for (const candidate of candidates) {
+      const queue = candidatesByRoot.get(candidate.rootRunId);
+      if (queue) {
+        queue.push(candidate);
+      } else {
+        rootOrder.push(candidate.rootRunId);
+        candidatesByRoot.set(candidate.rootRunId, [candidate]);
+      }
+    }
 
-    while (availableSlots > 0 && candidates.length > 0) {
+    while (availableSlots > 0 && rootOrder.length > 0) {
       let claimedInRound = false;
-      for (const run of runningRuns) {
+      for (const rootRunId of rootOrder) {
         if (availableSlots === 0) break;
-        if (saturatedRuns.has(run.runId)) continue;
-        const candidateIndex = candidates.findIndex(
-          (candidate) => candidate.runId === run.runId,
-        );
-        if (candidateIndex < 0) continue;
-        const [candidate] = candidates.splice(candidateIndex, 1);
-        if (!candidate) continue;
-        try {
-          const claimed = this.claim(
-            candidate.runId,
-            candidate.nodeId,
-            actorId,
-          );
-          assignments.push(claimed.value);
-          changes.push({
-            revision: claimed.revision,
-            event: claimed.event,
-          });
-          availableSlots -= 1;
-          claimedInRound = true;
-        } catch (error) {
-          if (
-            error instanceof BurnGraphError &&
-            ["MAX_ACTIVE_REACHED", "RUN_NOT_RUNNING"].includes(error.code)
-          ) {
-            saturatedRuns.add(run.runId);
-            continue;
-          }
-          if (
-            error instanceof BurnGraphError &&
-            error.code === "ACTOR_ASSIGNMENT_LIMIT_REACHED"
-          ) {
-            availableSlots = 0;
+        const queue = candidatesByRoot.get(rootRunId) ?? [];
+        while (queue.length > 0) {
+          const candidate = queue.shift()!;
+          if (saturatedRuns.has(candidate.runId)) continue;
+          try {
+            const claimed = this.claim(
+              candidate.runId,
+              candidate.nodeId,
+              actorId,
+            );
+            assignments.push(claimed.value);
+            changes.push({
+              revision: claimed.revision,
+              event: claimed.event,
+            });
+            availableSlots -= 1;
+            claimedInRound = true;
             break;
+          } catch (error) {
+            if (
+              error instanceof BurnGraphError &&
+              ["MAX_ACTIVE_REACHED", "RUN_NOT_RUNNING"].includes(error.code)
+            ) {
+              saturatedRuns.add(candidate.runId);
+              continue;
+            }
+            if (
+              error instanceof BurnGraphError &&
+              error.code === "ACTOR_ASSIGNMENT_LIMIT_REACHED"
+            ) {
+              availableSlots = 0;
+              break;
+            }
+            if (
+              error instanceof BurnGraphError &&
+              error.retryable &&
+              ["NODE_NOT_READY", "RESOURCE_BUSY"].includes(error.code)
+            ) {
+              continue;
+            }
+            throw error;
           }
-          if (
-            error instanceof BurnGraphError &&
-            error.retryable &&
-            error.code === "NODE_NOT_READY"
-          ) {
-            continue;
-          }
-          throw error;
         }
       }
       if (!claimedInRound) break;
@@ -2584,7 +2843,7 @@ export class BurnGraphServiceBase {
       const reconciled = this.database.immediate(() => {
         const stale = this.database.db
           .query(
-            `SELECT node_id, actor_id
+            `SELECT node_id, actor_id, assignment_id
                FROM node_runs
               WHERE run_id = ?
                 AND status = 'running'
@@ -2598,6 +2857,7 @@ export class BurnGraphServiceBase {
         for (const row of stale) {
           const nodeId = stringValue(row, "node_id");
           const actorId = optionalString(row, "actor_id");
+          const assignmentId = optionalString(row, "assignment_id");
           const node = this.nodeRow(runId, nodeId);
           const attempt = numberValue(node, "attempt");
           this.database.db
@@ -2623,6 +2883,9 @@ export class BurnGraphServiceBase {
                   WHERE actor_id = ? AND run_id = ? AND node_id = ?`,
               )
               .run(actorId, runId, nodeId);
+          }
+          if (assignmentId !== null) {
+            this.releaseAssignmentResources(assignmentId);
           }
         }
 
@@ -2702,6 +2965,209 @@ export class BurnGraphServiceBase {
     return rows.map((row) => this.eventFromRow(row));
   }
 
+  inspectOverview(options: PortfolioOverviewOptions): PortfolioOverview {
+    if (
+      !Number.isInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > 1_000
+    ) {
+      throw new BurnGraphError(
+        "INVALID_LIMIT",
+        "Overview limit must be 1-1000",
+      );
+    }
+    if (
+      options.depth !== undefined &&
+      (!Number.isInteger(options.depth) ||
+        options.depth < 0 ||
+        options.depth > this.config.maxHierarchyDepth)
+    ) {
+      throw new BurnGraphError(
+        "INVALID_DEPTH",
+        `Overview depth must be 0-${this.config.maxHierarchyDepth}`,
+      );
+    }
+    return this.database.read(() => {
+      const project = this.projectSnapshot();
+      const selectedRunId = options.run
+        ? this.resolveRun(options.run)
+        : null;
+      const selectedRootRunId = options.root
+        ? this.getSnapshot(options.root, 0).summary.rootRunId
+        : null;
+      const summaries = new Map(
+        project.runs.map((summary) => [summary.runId, summary]),
+      );
+      const rootPriority = (summary: GraphSummary): RunPriority =>
+        summaries.get(summary.rootRunId)?.priority ?? summary.priority;
+      const candidateRuns = project.runs.filter(
+        (summary) =>
+          (selectedRunId === null || summary.runId === selectedRunId) &&
+          (selectedRootRunId === null ||
+            summary.rootRunId === selectedRootRunId) &&
+          (options.runStatus === undefined ||
+            summary.status === options.runStatus) &&
+          (options.depth === undefined || summary.depth === options.depth) &&
+          (options.priority === undefined ||
+            rootPriority(summary) === options.priority),
+      );
+      const readyByNode = new Map(
+        this.listReady().map((candidate) => [
+          `${candidate.runId}\u0000${candidate.nodeId}`,
+          candidate,
+        ]),
+      );
+      const locksByNode = new Map<string, string[]>();
+      const activeResources = new Set<string>();
+      const lockRows = this.database.db
+        .query(
+          `SELECT run_id, node_id, resource
+             FROM resource_locks
+            ORDER BY resource`,
+        )
+        .all() as Row[];
+      for (const lock of lockRows) {
+        activeResources.add(stringValue(lock, "resource"));
+        const key = `${stringValue(lock, "run_id")}\u0000${stringValue(lock, "node_id")}`;
+        locksByNode.set(key, [
+          ...(locksByNode.get(key) ?? []),
+          stringValue(lock, "resource"),
+        ]);
+      }
+      const matchingNodes: PortfolioOverviewNode[] = [];
+      for (const summary of candidateRuns) {
+        const snapshot = this.getSnapshot(summary.runId, 0);
+        for (const node of snapshot.nodes) {
+          if (!options.nodeStatuses.includes(node.status)) continue;
+          if (options.actor !== undefined && node.actorId !== options.actor) {
+            continue;
+          }
+          const spec = snapshot.spec.nodes.find(
+            (candidate) => candidate.id === node.id,
+          );
+          if (!spec) continue;
+          if (options.tag !== undefined && !spec.tags.includes(options.tag)) {
+            continue;
+          }
+          const key = `${summary.runId}\u0000${node.id}`;
+          const ready = readyByNode.get(key);
+          const declaredResources =
+            "resources" in spec && Array.isArray(spec.resources)
+              ? spec.resources
+              : [];
+          const checkResources =
+            spec.type === "gate" && spec.check
+              ? this.getCheck(spec.check.id, spec.check.revision).resources
+              : [];
+          const resources = [
+            ...new Set([
+              ...declaredResources,
+              ...checkResources,
+              ...(ready?.resources ?? []),
+              ...(locksByNode.get(key) ?? []),
+            ]),
+          ].sort();
+          if (
+            options.resource !== undefined &&
+            !resources.includes(options.resource)
+          ) {
+            continue;
+          }
+          matchingNodes.push({
+            runId: summary.runId,
+            rootRunId: summary.rootRunId,
+            graphId: summary.graphId,
+            depth: summary.depth,
+            priority: rootPriority(summary),
+            nodeId: node.id,
+            type: node.type,
+            title: node.title,
+            status: node.status,
+            attempt: node.attempt,
+            assignmentId: node.assignmentId,
+            actorId: node.actorId,
+            tags: spec.tags,
+            resources,
+            eligibility:
+              ready?.eligibility ??
+              (node.status === "ready" && spec.type === "gate"
+                ? resourceEligibility(resources, activeResources)
+                : null),
+            updatedAt: node.updatedAt,
+          });
+        }
+      }
+      const nodeScoped =
+        options.actor !== undefined ||
+        options.tag !== undefined ||
+        options.resource !== undefined;
+      const nodeMatchedRunIds = new Set(
+        matchingNodes.map((node) => node.runId),
+      );
+      const matchingRuns = nodeScoped
+        ? candidateRuns.filter((summary) =>
+            nodeMatchedRunIds.has(summary.runId),
+          )
+        : candidateRuns;
+      return {
+        schemaVersion: 1,
+        projectId: project.projectId,
+        capturedAt: project.capturedAt,
+        filters: {
+          run: selectedRunId,
+          root: selectedRootRunId,
+          runStatus: options.runStatus ?? null,
+          nodeStatuses: options.nodeStatuses,
+          actor: options.actor ?? null,
+          tag: options.tag ?? null,
+          resource: options.resource ?? null,
+          priority: options.priority ?? null,
+          depth: options.depth ?? null,
+          limit: options.limit,
+        },
+        totals: {
+          graphs: project.graphs.length,
+          matchingRuns: matchingRuns.length,
+          listedRuns: Math.min(matchingRuns.length, options.limit),
+          matchingNodes: matchingNodes.length,
+          listedNodes: Math.min(matchingNodes.length, options.limit),
+        },
+        truncated: {
+          runs: matchingRuns.length > options.limit,
+          nodes: matchingNodes.length > options.limit,
+        },
+        runs: matchingRuns.slice(0, options.limit).map((summary) => ({
+          ...summary,
+          rootPriority: rootPriority(summary),
+        })),
+        nodes: matchingNodes.slice(0, options.limit),
+        metrics: this.inspectMetrics(
+          selectedRootRunId ?? selectedRunId ?? undefined,
+        ),
+        lastEventSequence: project.lastEventSequence,
+      };
+    });
+  }
+
+  inspectMetrics(reference?: string): RuntimeMetrics {
+    return this.database.read(() => {
+      const scopeRunId = reference ? this.resolveRun(reference) : null;
+      const runIds =
+        scopeRunId === null
+          ? this.listRuns().map((run) => run.runId)
+          : this.descendantRunRows(scopeRunId).map((row) =>
+              stringValue(row, "run_id"),
+            );
+      return deriveRuntimeMetrics({
+        database: this.database,
+        runIds,
+        scopeRunId,
+        ready: this.listReadyResourceMetrics(),
+        now: this.now(),
+      });
+    });
+  }
+
   projectSnapshot(): {
     readonly projectId: string;
     readonly graphs: ReturnType<BurnGraphServiceBase["listGraphs"]>;
@@ -2709,6 +3175,7 @@ export class BurnGraphServiceBase {
     readonly rootRuns: readonly PortfolioRun[];
     readonly lastEventSequence: number;
     readonly capturedAt: string;
+    readonly metrics: RuntimeMetrics;
   } {
     return this.database.read(() => {
       const row = this.database.db
@@ -2751,6 +3218,7 @@ export class BurnGraphServiceBase {
           })),
         lastEventSequence: numberValue(row, "sequence"),
         capturedAt: this.timestamp(),
+        metrics: this.inspectMetrics(),
       };
     });
   }
@@ -4108,6 +4576,15 @@ export class BurnGraphServiceBase {
     }
   }
 
+  private releaseAssignmentResources(assignmentId: string): void {
+    this.database.db
+      .query(
+        `DELETE FROM resource_locks
+          WHERE owner_kind = 'assignment' AND owner_id = ?`,
+      )
+      .run(assignmentId);
+  }
+
   private stopNode(
     reference: string,
     nodeId: string,
@@ -4135,6 +4612,7 @@ export class BurnGraphServiceBase {
         expectation,
       );
       const attempt = numberValue(node, "attempt");
+      const assignmentId = optionalString(node, "assignment_id");
       const shouldRetry =
         requestedStatus === "failed" && retry && attempt < nodeSpec.maxAttempts;
       const status = shouldRetry ? "ready" : requestedStatus;
@@ -4147,6 +4625,9 @@ export class BurnGraphServiceBase {
             WHERE run_id = ? AND node_id = ? AND attempt = ?`,
         )
         .run(attemptStatus, at, runId, nodeId, attempt);
+      if (assignmentId !== null) {
+        this.releaseAssignmentResources(assignmentId);
+      }
       this.database.db
         .query(
           `UPDATE node_runs
@@ -4274,6 +4755,13 @@ export class BurnGraphServiceBase {
       .run(at, ...affectedRunIds);
     this.database.db
       .query(`DELETE FROM actor_focus WHERE run_id IN (${placeholders})`)
+      .run(...affectedRunIds);
+    this.database.db
+      .query(
+        `DELETE FROM resource_locks
+          WHERE owner_kind = 'assignment'
+            AND run_id IN (${placeholders})`,
+      )
       .run(...affectedRunIds);
 
     const descendantIds = unfinishedDescendants.map((row) =>

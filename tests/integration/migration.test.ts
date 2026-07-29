@@ -330,6 +330,7 @@ describe("dev.4 hierarchy migration", () => {
         { version: 3 },
         { version: 4 },
         { version: 5 },
+        { version: 6 },
       ]);
       expect(
         (
@@ -338,6 +339,14 @@ describe("dev.4 hierarchy migration", () => {
             .all() as Array<{ name: string }>
         ).map(({ name }) => name),
       ).toContain("continuation_json");
+      expect(
+        service.database.db
+          .query(
+            `SELECT name FROM sqlite_master
+              WHERE type = 'table' AND name = 'template_instantiations'`,
+          )
+          .get(),
+      ).toEqual({ name: "template_instantiations" });
       expect(
         service.database.db
           .query("SELECT COUNT(*) AS count FROM runs")

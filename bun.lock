@@ -21,35 +21,39 @@
     },
     "apps/cli": {
       "name": "@burn-graph/cli",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
     },
     "apps/product-preview": {
       "name": "@burn-graph/product-preview",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
     },
     "apps/viewer": {
       "name": "@burn-graph/viewer",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
     },
     "packages/core": {
       "name": "@burn-graph/core",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
     },
     "packages/design-system": {
       "name": "@burn-graph/design-system",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
     },
     "packages/gate": {
       "name": "@burn-graph/gate",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
     },
     "packages/render": {
       "name": "@burn-graph/render",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
     },
     "packages/system-driver": {
       "name": "@burn-graph/system-driver",
-      "version": "0.1.0-dev.6",
+      "version": "0.1.0-dev.7",
+    },
+    "packages/templates": {
+      "name": "@burn-graph/templates",
+      "version": "0.1.0-dev.7",
     },
   },
   "packages": {
@@ -70,6 +74,8 @@
     "@burn-graph/render": ["@burn-graph/render@workspace:packages/render"],
 
     "@burn-graph/system-driver": ["@burn-graph/system-driver@workspace:packages/system-driver"],
+
+    "@burn-graph/templates": ["@burn-graph/templates@workspace:packages/templates"],
 
     "@burn-graph/viewer": ["@burn-graph/viewer@workspace:apps/viewer"],
 

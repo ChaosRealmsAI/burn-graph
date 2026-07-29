@@ -3,6 +3,7 @@ import type {
   GraphSummary,
   GraphTreeSnapshot,
   PortfolioRun,
+  RuntimeMetrics,
 } from "@burn-graph/core";
 
 interface ApiEnvelope<T> {
@@ -20,6 +21,7 @@ export interface ProjectSnapshotResponse {
   readonly rootRuns: readonly PortfolioRun[];
   readonly lastEventSequence: number;
   readonly capturedAt: string;
+  readonly metrics: RuntimeMetrics;
 }
 
 async function request<T>(url: string): Promise<T> {

@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-dev7-template-portfolio",
+  "title": "Deliver dev.7 Template Portfolio",
+  "goal": "Deliver templates and bounded multi-root control as one installed-package vertical increment.",
+  "revision": 1,
+  "maxActive": 1,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start dev.7",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "shared-contract"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "parent"
+      ]
+    },
+    {
+      "id": "shared-contract",
+      "type": "task",
+      "title": "Lock dev.7 shared boundaries",
+      "prompt": {
+        "objective": "Lock template registration, scheduler policy, resource ownership, metrics, projection, package, and Help boundaries before child implementation.",
+        "instructions": [
+          "Map one source of truth for template assets and generated specs.",
+          "Keep policy scoring independent from transactional claims.",
+          "Specify bounded common projections for CLI, Viewer, SVG, and PNG."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/milestones/M07-template-portfolio.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "../privacy/slices/S12-template-catalog/versions/0.1.0-dev.7/plan.md",
+          "../privacy/slices/S13-portfolio-control/versions/0.1.0-dev.7/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "Module owners and cross-boundary contracts are explicit.",
+          "Atomicity, fairness, resource, metrics, projection, and package oracles are executable.",
+          "Child slices have non-overlapping primary ownership."
+        ],
+        "outputSchema": null,
+        "role": "dev.7 shared contract owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S07-templates-control.feature"
+        ],
+        "writablePaths": [
+          "packages/templates",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/storage.ts",
+          "packages/core/src/scheduler.ts",
+          "packages/core/src/metrics.ts",
+          "tests"
+        ],
+        "forbidden": [
+          "Do not build a second state store.",
+          "Do not let templates bypass graph validation.",
+          "Do not let read-only surfaces mutate or run Checks."
+        ],
+        "runtime": [
+          "bun run check"
+        ]
+      },
+      "next": [
+        {
+          "to": "vertical-slices"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "contract"
+      ],
+      "resources": []
+    },
+    {
+      "id": "vertical-slices",
+      "type": "subgraph",
+      "title": "Run template and portfolio slices",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "integrated-verification",
+          "route": "success",
+          "label": "Both slices complete"
+        },
+        {
+          "to": "integrated-verification",
+          "route": "failure",
+          "label": "Review failed child"
+        },
+        {
+          "to": "integrated-verification",
+          "route": "cancelled",
+          "label": "Review cancelled child"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "hierarchy"
+      ],
+      "mode": "static",
+      "children": [
+        {
+          "graphId": "selfhost-dev7-template",
+          "revision": 1,
+          "runId": "selfhost-dev7-template-r1",
+          "label": "S12 Template Catalog"
+        },
+        {
+          "graphId": "selfhost-dev7-portfolio",
+          "revision": 1,
+          "runId": "selfhost-dev7-portfolio-r1",
+          "label": "S13 Portfolio Control"
+        }
+      ],
+      "resources": []
+    },
+    {
+      "id": "integrated-verification",
+      "type": "task",
+      "title": "Verify template portfolio end to end",
+      "prompt": {
+        "objective": "Replay UP09 and BDD S07 from source and isolated dev.7 package, including six templates, several roots, fairness, resource contention, metrics, Viewer, SVG, and PNG.",
+        "instructions": [
+          "Use a known-invalid atomicity control and fixed-clock starvation control.",
+          "Compare every projection from one bounded snapshot.",
+          "Audit package assets, permissions, dependencies, size, and privacy."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M07-template-portfolio.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "AGENTS.md",
+          "tests",
+          "scripts/verify"
+        ],
+        "doneWhen": [
+          "Both child Runs complete through pass.",
+          "Source and isolated-package UP09 pass with known-bad controls.",
+          "CLI, Viewer, SVG, and PNG totals agree.",
+          "Performance and output bounds pass with no private leakage."
+        ],
+        "outputSchema": null,
+        "role": "dev.7 integration verifier",
+        "lockedContracts": [
+          "../privacy/milestones/M07-template-portfolio.md"
+        ],
+        "writablePaths": [
+          "tests/e2e",
+          "scripts/verify",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not hide child failure behind aggregate success.",
+          "Do not reduce isolated-package coverage."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "dev7-review"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "integration"
+      ],
+      "resources": []
+    },
+    {
+      "id": "dev7-review",
+      "type": "decision",
+      "title": "Accept or repair dev.7",
+      "prompt": {
+        "objective": "Route pass only when M07, S12, S13, UP09, and BDD S07 pass through the isolated package with independent code, architecture, safety, privacy, and dogfood review.",
+        "instructions": [
+          "Choose repair for any atomicity, idempotency, scheduler, starvation, lock, metrics, bounds, projection, package, or governance blocker.",
+          "Cite exact commands, counts, timings, run IDs, and artifact hash."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M07-template-portfolio.md",
+          "../privacy/project.json",
+          "../privacy/bdd/S07-templates-control.feature",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "S12 and S13 child Runs pass.",
+          "Full source and package verification pass.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "dev.7 release decision",
+        "lockedContracts": [
+          "../privacy/milestones/M07-template-portfolio.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass from focused tests alone."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass"
+        },
+        {
+          "to": "integrated-verification",
+          "route": "repair",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "dev.7 ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "parent"
+      ]
+    }
+  ]
+}

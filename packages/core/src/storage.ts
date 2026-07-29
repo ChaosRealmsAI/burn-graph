@@ -443,6 +443,33 @@ export class BurnGraphDatabase {
       }
       this.ensureColumn("wait_signals", "continuation_json", "TEXT");
 
+      const templateCatalog = this.db
+        .query("SELECT version FROM schema_migrations WHERE version = 6")
+        .get() as { version: number } | null;
+      if (!templateCatalog) {
+        this.db.exec(`
+          CREATE TABLE template_instantiations (
+            idempotency_key TEXT PRIMARY KEY,
+            template_id TEXT NOT NULL,
+            template_version INTEGER NOT NULL,
+            input_digest TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+
+          CREATE INDEX template_instantiations_template_idx
+            ON template_instantiations(template_id, created_at);
+        `);
+        this.db
+          .query(
+            `INSERT INTO schema_migrations
+             (version, name, applied_at)
+             VALUES (6, 'template-catalog',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+          )
+          .run();
+      }
+
       this.db.exec("COMMIT;");
     } catch (error) {
       if (this.db.inTransaction) {

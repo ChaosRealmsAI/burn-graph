@@ -43,6 +43,11 @@ product contract.
   termination, bounded output, and result classification.
 - `packages/render` owns cache identity, browser discovery, exact isolated
   headless lifecycle, artifact validation, and SVG/PNG persistence.
+- `packages/templates` owns the six immutable workflow descriptors, bounded
+  input generation, and no runtime state.
+- `packages/core/src/scheduler.ts` owns deterministic root rotation and
+  priority aging; `template-service.ts` owns atomic template registration;
+  `metrics.ts` owns private-text-free runtime derivation.
 - `packages/design-system` owns visual language, tokens, React components, and
   complete graph dashboard/detail Regions plus the shared browser Mermaid
   configuration.
@@ -65,6 +70,8 @@ product contract.
 - Development AI loop: `bun run burn-graph -- next --actor <actor>`
 - Register a Check: `bun run burn-graph -- check apply --input <check.json>`
 - Resolve a Wait: `bun run burn-graph -- signal resolve --signal <id> --route <route> --idempotency-key <key> --input <result.json>`
+- Instantiate a template: `bun run burn-graph -- template instantiate <template> --input <input.json>`
+- Inspect portfolio metrics: `bun run burn-graph -- inspect metrics [run-or-graph]`
 - Development artifact: `bun run burn-graph -- render <run-or-graph>`
 - Product Preview: `bun run preview`
 - Start named Viewer: `bun run viewer:start -- <name> <project-root> [port]`
@@ -72,6 +79,7 @@ product contract.
 - Stop named Viewer: `bun run viewer:stop -- <name>`
 - Blackbox E2E: `bun run e2e`
 - Five-sample 100-node render budget: `bun run verify:render-performance`
+- 128-root portfolio budget: `bun run verify:portfolio-performance`
 
 Viewer instances support parallel operation when they use distinct names,
 project roots, and ports. Runtime scripts release only their recorded PID.

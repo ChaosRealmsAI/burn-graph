@@ -12,6 +12,13 @@ import { graphSummaryView, graphTreeDetailView } from "./view-model.ts";
 
 export function App() {
   const [graphs, setGraphs] = useState<readonly GraphSummaryView[]>([]);
+  const [metrics, setMetrics] = useState<{
+    readonly activeResources: number;
+    readonly contendedNodes: number;
+    readonly maximumLiveAssignments: number;
+    readonly attempts: number;
+    readonly recoveries: number;
+  } | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [projectionDepth, setProjectionDepth] = useState(0);
@@ -32,6 +39,13 @@ export function App() {
         }),
       ),
     );
+    setMetrics({
+      activeResources: snapshot.metrics.resources.activeLocks,
+      contendedNodes: snapshot.metrics.resources.contendedReadyNodes,
+      maximumLiveAssignments: snapshot.metrics.assignments.maximumLive,
+      attempts: snapshot.metrics.totals.attempts,
+      recoveries: snapshot.metrics.totals.leaseRecoveries,
+    });
     if (selectedRunId) {
       const graph = await fetchTree(selectedRunId, projectionDepth);
       setDetail(graphTreeDetailView(graph));
@@ -121,6 +135,7 @@ export function App() {
       graphs={graphs}
       selectedGraphId={selectedRunId}
       connection={connection}
+      metrics={metrics}
       onSelect={(runId) => void openGraph(runId)}
     />
   );

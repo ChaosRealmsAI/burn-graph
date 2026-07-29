@@ -1,0 +1,376 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-dev7-template",
+  "title": "Deliver dev.7 Template Catalog",
+  "goal": "Ship six immutable package templates with atomic, idempotent project-local instantiation and complete installed-package behavior.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start template slice",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "template-contract"
+        },
+        {
+          "to": "atomicity-poc"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "template"
+      ]
+    },
+    {
+      "id": "template-contract",
+      "type": "task",
+      "title": "Make template contracts executable",
+      "prompt": {
+        "objective": "Define and test the public catalog, six input contracts, normalized output manifest, complete preflight validation, atomic commit, and idempotent replay.",
+        "instructions": [
+          "Keep package templates immutable and generic.",
+          "Reject absolute paths, traversal, unknown overrides, missing Check revisions, and colliding IDs before write.",
+          "Assert all-or-nothing files and Graph revisions."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "../privacy/slices/S12-template-catalog/versions/0.1.0-dev.7/plan.md",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/service.ts",
+          "scripts/build/package.ts"
+        ],
+        "doneWhen": [
+          "Six stable template descriptors and schemas are covered.",
+          "Known-invalid input proves zero files and zero revisions remain.",
+          "Equivalent idempotency replay returns identical IDs, revisions, and hashes."
+        ],
+        "outputSchema": null,
+        "role": "S12 contract owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S07-templates-control.feature"
+        ],
+        "writablePaths": [
+          "packages/templates",
+          "tests/templates"
+        ],
+        "forbidden": [
+          "Do not implement template facts twice.",
+          "Do not write before every generated GraphSpec and Check reference validates."
+        ],
+        "runtime": [
+          "bun test tests/templates"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "template",
+        "contract"
+      ],
+      "resources": []
+    },
+    {
+      "id": "atomicity-poc",
+      "type": "task",
+      "title": "Prove atomic template installation",
+      "prompt": {
+        "objective": "Instantiate one delivery hierarchy in an initialized temporary project and prove a later invalid child cannot leave files or registered revisions.",
+        "instructions": [
+          "Use only public validation and project-local paths.",
+          "Inject a deterministic pre-commit failure.",
+          "Reopen SQLite before checking the oracle."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "packages/core/src/storage.ts",
+          "packages/core/src/service.ts"
+        ],
+        "doneWhen": [
+          "Successful generation registers every revision and normalized JSON.",
+          "Injected failure leaves neither final nor temporary files and no new revisions.",
+          "The PoC does not require a daemon."
+        ],
+        "outputSchema": null,
+        "role": "S12 atomicity PoC owner",
+        "lockedContracts": [
+          "../privacy/architecture.md"
+        ],
+        "writablePaths": [
+          "pocs/template-instantiation",
+          "tests/templates"
+        ],
+        "forbidden": [
+          "Do not weaken SQLite or filesystem failure semantics.",
+          "Do not write outside the initialized project."
+        ],
+        "runtime": [
+          "bun test tests/templates"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "template",
+        "poc"
+      ],
+      "resources": []
+    },
+    {
+      "id": "contract-join",
+      "type": "join",
+      "title": "Converge template oracles",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "template-implement"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "template"
+      ]
+    },
+    {
+      "id": "template-implement",
+      "type": "task",
+      "title": "Implement package template catalog",
+      "prompt": {
+        "objective": "Implement delivery, vertical-slice, poc, bugfix, review-repair, and release assets plus list, show, instantiate, validation, Help, and packaging.",
+        "instructions": [
+          "Keep catalog logic in a cohesive package.",
+          "Generate canonical GraphSpec v2 JSON through one validator.",
+          "Commit files and immutable revisions as one recoverable operation.",
+          "Return a bounded public manifest and next actions."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M07-template-portfolio.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "packages/core/src/service.ts",
+          "apps/cli/src/index.ts",
+          "docs/cli.md",
+          "scripts/build/package.ts"
+        ],
+        "doneWhen": [
+          "template list, show, and instantiate return stable bounded JSON.",
+          "All six templates generate valid versioned local JSON and revisions.",
+          "Invalid input and conflicts are atomic and actionable.",
+          "The isolated archive contains the assets and no private facts."
+        ],
+        "outputSchema": null,
+        "role": "S12 implementation owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S07-templates-control.feature"
+        ],
+        "writablePaths": [
+          "packages/templates",
+          "packages/core/src/template-service.ts",
+          "apps/cli/src/index.ts",
+          "docs",
+          "scripts/build/package.ts",
+          "tests/templates",
+          "tests/e2e"
+        ],
+        "forbidden": [
+          "No Product Private content in package assets.",
+          "No overwrite or partial registration.",
+          "No direct JSON mutation contract for AI callers."
+        ],
+        "runtime": [
+          "bun run check",
+          "bun test tests/templates"
+        ]
+      },
+      "next": [
+        {
+          "to": "template-self-verify"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "template",
+        "implement"
+      ],
+      "resources": []
+    },
+    {
+      "id": "template-self-verify",
+      "type": "task",
+      "title": "Verify all template paths",
+      "prompt": {
+        "objective": "Generate all six templates, validate every resulting revision, exercise replay and invalid controls, and repeat through the isolated dev.7 package.",
+        "instructions": [
+          "Use fresh initialized projects for source and archive paths.",
+          "Hash generated normalized JSON.",
+          "Audit archive contents, permissions, size, and dependency count."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "tests/templates",
+          "tests/e2e/install-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "Every template validates from source and installed package.",
+          "Replay is inert and invalid input leaves no partial state.",
+          "Generated content and archive contain no private paths or prompts."
+        ],
+        "outputSchema": null,
+        "role": "S12 self-verifier",
+        "lockedContracts": [
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature"
+        ],
+        "writablePaths": [
+          "tests/templates",
+          "tests/e2e",
+          "scripts/verify"
+        ],
+        "forbidden": [
+          "Do not reduce installed-package coverage to smoke.",
+          "Do not weaken failure controls."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "template-review"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "template",
+        "verify"
+      ],
+      "resources": []
+    },
+    {
+      "id": "template-review",
+      "type": "decision",
+      "title": "Accept or repair template catalog",
+      "prompt": {
+        "objective": "Select pass only when S12 passes atomicity, idempotency, traversal, package, privacy, Help, and all-six-template review.",
+        "instructions": [
+          "Choose repair for duplicate facts, partial state, unsafe paths, unbounded overrides, missing archive assets, or reduced package coverage."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M07-template-portfolio.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "../privacy/project.json",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "All S12 checks and package replay pass.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "S12 quality decision",
+        "lockedContracts": [
+          "../privacy/milestones/M07-template-portfolio.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass from focused source tests alone."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass"
+        },
+        {
+          "to": "template-implement",
+          "route": "repair",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "template",
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Template catalog ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "template"
+      ]
+    }
+  ]
+}

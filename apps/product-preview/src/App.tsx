@@ -122,6 +122,13 @@ export function App() {
           graphs={scene === "empty" ? [] : previewGraphs}
           selectedGraphId={selectedGraphId}
           connection={connection}
+          metrics={{
+            activeResources: scene === "resource-contention" ? 1 : 0,
+            contendedNodes: scene === "resource-contention" ? 1 : 0,
+            maximumLiveAssignments: 4,
+            attempts: 17,
+            recoveries: 1,
+          }}
           onSelect={(graphId) => {
             setSelectedGraphId(graphId);
             setSelectedNodeId(null);

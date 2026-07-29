@@ -127,7 +127,7 @@ const ResourceNamesSchema = z.array(IdentifierSchema).max(32).superRefine(
   },
 );
 
-const ProjectRelativePathSchema = z
+export const ProjectRelativePathSchema = z
   .string()
   .trim()
   .min(1)
@@ -487,6 +487,9 @@ export const GraphStatusSchema = z.enum([
 ]);
 export type GraphStatus = z.infer<typeof GraphStatusSchema>;
 
+export const RunPrioritySchema = z.enum(["low", "normal", "high"]);
+export type RunPriority = z.infer<typeof RunPrioritySchema>;
+
 export const EdgeStatusSchema = z.enum(["pending", "taken", "disabled"]);
 export type EdgeStatus = z.infer<typeof EdgeStatusSchema>;
 
@@ -582,7 +585,7 @@ export interface GraphSummary {
   readonly parentNodeId: string | null;
   readonly rootRunId: string;
   readonly depth: number;
-  readonly priority: "low" | "normal" | "high";
+  readonly priority: RunPriority;
   readonly focusedNodeId: string | null;
   readonly focusedNodeTitle: string | null;
   readonly counts: GraphCounts;
@@ -782,13 +785,168 @@ export interface WaitSignalSummary {
 
 export interface ResourceLockSummary {
   readonly resource: string;
-  readonly ownerKind: "gate";
+  readonly ownerKind: "assignment" | "gate";
   readonly ownerId: string;
   readonly rootRunId: string;
   readonly runId: string;
   readonly nodeId: string;
   readonly expiresAt: string;
   readonly createdAt: string;
+}
+
+export interface TemplateInstantiationRequest {
+  readonly template: {
+    readonly id: string;
+    readonly version: number;
+  };
+  readonly idempotencyKey: string;
+  readonly inputDigest: string;
+  readonly graphs: readonly GraphSpec[];
+}
+
+export interface TemplateGraphReceipt {
+  readonly graphId: string;
+  readonly revision: number;
+  readonly path: string;
+  readonly sha256: string;
+}
+
+export interface TemplateInstantiationReceipt {
+  readonly schemaVersion: 1;
+  readonly template: {
+    readonly id: string;
+    readonly version: number;
+  };
+  readonly idempotencyKey: string;
+  readonly inputDigest: string;
+  readonly graphs: readonly TemplateGraphReceipt[];
+  readonly createdAt: string;
+  readonly replayed: boolean;
+}
+
+export interface DurationMetrics {
+  readonly count: number;
+  readonly totalMs: number;
+  readonly averageMs: number | null;
+  readonly maximumMs: number | null;
+}
+
+export interface RuntimeMetrics {
+  readonly schemaVersion: 1;
+  readonly capturedAt: string;
+  readonly scope: {
+    readonly runId: string | null;
+    readonly runCount: number;
+    readonly rootCount: number;
+  };
+  readonly totals: {
+    readonly nodes: number;
+    readonly attempts: number;
+    readonly repairs: number;
+    readonly leaseRecoveries: number;
+  };
+  readonly assignments: {
+    readonly current: number;
+    readonly maximumLive: number;
+    readonly averageLive: number;
+    readonly duration: DurationMetrics;
+  };
+  readonly gates: {
+    readonly claimed: number;
+    readonly success: number;
+    readonly nonSuccess: number;
+    readonly timeout: number;
+    readonly outputLimit: number;
+    readonly spawnError: number;
+    readonly staleOrExpired: number;
+    readonly duration: DurationMetrics;
+  };
+  readonly signals: {
+    readonly waiting: number;
+    readonly resolved: number;
+    readonly timedOut: number;
+    readonly stale: number;
+    readonly latency: DurationMetrics;
+  };
+  readonly resources: {
+    readonly activeLocks: number;
+    readonly contendedReadyNodes: number;
+    readonly contendedResources: number;
+  };
+  readonly excludedPrivateFields: readonly [
+    "prompts",
+    "results",
+    "checkOutput",
+    "environment",
+  ];
+  readonly unknownFields: readonly string[];
+}
+
+export interface PortfolioOverviewOptions {
+  readonly run?: string;
+  readonly root?: string;
+  readonly runStatus?: GraphStatus;
+  readonly nodeStatuses: readonly NodeStatus[];
+  readonly actor?: string;
+  readonly tag?: string;
+  readonly resource?: string;
+  readonly priority?: RunPriority;
+  readonly depth?: number;
+  readonly limit: number;
+}
+
+export interface PortfolioOverviewNode {
+  readonly runId: string;
+  readonly rootRunId: string;
+  readonly graphId: string;
+  readonly depth: number;
+  readonly priority: RunPriority;
+  readonly nodeId: string;
+  readonly type: NodeType;
+  readonly title: string;
+  readonly status: NodeStatus;
+  readonly attempt: number;
+  readonly assignmentId: string | null;
+  readonly actorId: string | null;
+  readonly tags: readonly string[];
+  readonly resources: readonly string[];
+  readonly eligibility: ReadyWork["eligibility"] | null;
+  readonly updatedAt: string;
+}
+
+export interface PortfolioOverview {
+  readonly schemaVersion: 1;
+  readonly projectId: string;
+  readonly capturedAt: string;
+  readonly filters: {
+    readonly run: string | null;
+    readonly root: string | null;
+    readonly runStatus: GraphStatus | null;
+    readonly nodeStatuses: readonly NodeStatus[];
+    readonly actor: string | null;
+    readonly tag: string | null;
+    readonly resource: string | null;
+    readonly priority: RunPriority | null;
+    readonly depth: number | null;
+    readonly limit: number;
+  };
+  readonly totals: {
+    readonly graphs: number;
+    readonly matchingRuns: number;
+    readonly listedRuns: number;
+    readonly matchingNodes: number;
+    readonly listedNodes: number;
+  };
+  readonly truncated: {
+    readonly runs: boolean;
+    readonly nodes: boolean;
+  };
+  readonly runs: readonly (GraphSummary & {
+    readonly rootPriority: RunPriority;
+  })[];
+  readonly nodes: readonly PortfolioOverviewNode[];
+  readonly metrics: RuntimeMetrics;
+  readonly lastEventSequence: number;
 }
 
 export interface SystemNodeMutation<T> {
@@ -798,12 +956,23 @@ export interface SystemNodeMutation<T> {
 
 export interface ReadyWork {
   readonly runId: string;
+  readonly rootRunId: string;
   readonly graphId: string;
   readonly nodeId: string;
   readonly type: "task" | "decision" | "subgraph";
   readonly title: string;
   readonly actorHint: string | null;
   readonly attempt: number;
+  readonly depth: number;
+  readonly priority: RunPriority;
+  readonly effectivePriority: RunPriority;
+  readonly readySince: string;
+  readonly resources: readonly string[];
+  readonly eligibility: {
+    readonly eligible: boolean;
+    readonly reason: "RESOURCE_BUSY" | null;
+    readonly blockedResources: readonly string[];
+  };
   readonly updatedAt: string;
 }
 

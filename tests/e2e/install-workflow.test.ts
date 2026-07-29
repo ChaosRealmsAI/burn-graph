@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -32,7 +33,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.6.tgz",
+  "burn-graph-0.1.0-dev.7.tgz",
 );
 const roots: string[] = [];
 
@@ -103,6 +104,19 @@ function assignment(envelope: any, nodeId: string): any {
   return found;
 }
 
+function graphAssignment(
+  envelope: any,
+  graphId: string,
+  nodeId: string,
+): any {
+  const found = envelope.data.assignments.find(
+    (candidate: any) =>
+      candidate.graph.graphId === graphId && candidate.node.id === nodeId,
+  );
+  if (!found) throw new Error(`Missing Assignment ${graphId}/${nodeId}`);
+  return found;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) removeTestProject(root);
 });
@@ -116,6 +130,7 @@ describe("lightweight Bun package", () => {
     });
     expect(archiveListing.exitCode, archiveListing.stderr).toBe(0);
     expect(archiveListing.stdout).toContain("package/viewer/render.html");
+    expect(archiveListing.stdout).toContain("package/templates/catalog.json");
     expect(archiveListing.stdout).not.toMatch(
       /(?:^|\/)(?:privacy|bdd|milestones|slices|issues|feedback)(?:\/|$)|product\.md/,
     );
@@ -202,6 +217,7 @@ describe("lightweight Bun package", () => {
 
     const executable = path.join(installPrefix, "bin", "burn-graph");
     expect(existsSync(executable)).toBe(true);
+    expect(statSync(executable).mode & 0o111).not.toBe(0);
     const version = await command(executable, ["--version"], {
       cwd: testRoot,
       env: installEnvironment,
@@ -211,7 +227,7 @@ describe("lightweight Bun package", () => {
       schemaVersion: 1,
       ok: true,
       command: "version",
-      data: { version: "0.1.0-dev.6" },
+      data: { version: "0.1.0-dev.7" },
     });
 
     const installedPackage = path.join(
@@ -234,6 +250,392 @@ describe("lightweight Bun package", () => {
       `${JSON.stringify(parallelGraph("installed-smoke"))}\n`,
     );
     await installedCli(executable, projectRoot, ["init", projectRoot]);
+    const installedTemplates = await installedCli(
+      executable,
+      projectRoot,
+      ["template", "list"],
+    );
+    expect(installedTemplates.data.count).toBe(6);
+    const installedCatalog = JSON.parse(
+      readFileSync(
+        path.join(installedPackage, "templates", "catalog.json"),
+        "utf8",
+      ),
+    ) as { readonly templates: readonly unknown[] };
+    expect(installedTemplates.data.templates).toEqual(
+      installedCatalog.templates,
+    );
+    expect(
+      (
+        await installedCli(executable, projectRoot, [
+          "template",
+          "show",
+          "bugfix",
+        ])
+      ).data.template.id,
+    ).toBe("bugfix");
+    const installedTemplateInput = (
+      graphId: string,
+      idempotencyKey: string,
+      include: readonly string[] = [],
+    ) => ({
+      schemaVersion: 1,
+      graphId,
+      goal: `Complete ${graphId} from the isolated package.`,
+      idempotencyKey,
+      include,
+      context: {
+        mustRead: ["README.md"],
+        lockedContracts: [],
+        writablePaths: ["src"],
+        forbidden: ["Do not change unrelated files."],
+        runtime: ["burn-graph inspect metrics"],
+      },
+      promptOverrides: [],
+    });
+    const installedBugfixInput = path.join(
+      projectRoot,
+      "installed-bugfix-input.json",
+    );
+    const installedPocInput = path.join(
+      projectRoot,
+      "installed-poc-input.json",
+    );
+    writeFileSync(
+      installedBugfixInput,
+      `${JSON.stringify(
+        installedTemplateInput(
+          "installed-template-bugfix",
+          "installed-template-bugfix-key",
+          ["poc"],
+        ),
+      )}\n`,
+    );
+    writeFileSync(
+      installedPocInput,
+      `${JSON.stringify(
+        installedTemplateInput(
+          "installed-template-poc",
+          "installed-template-poc-key",
+        ),
+      )}\n`,
+    );
+    const instantiatedBugfix = await installedCli(
+      executable,
+      projectRoot,
+      [
+        "template",
+        "instantiate",
+        "bugfix",
+        "--input",
+        installedBugfixInput,
+      ],
+    );
+    expect(instantiatedBugfix.data).toMatchObject({
+      replayed: false,
+      graphs: [{
+        graphId: "installed-template-bugfix",
+        path: ".burn-graph/graphs/installed-template-bugfix.json",
+      }],
+    });
+    expect(
+      (
+        await installedCli(executable, projectRoot, [
+          "template",
+          "instantiate",
+          "bugfix",
+          "--input",
+          installedBugfixInput,
+        ])
+      ).data.replayed,
+    ).toBe(true);
+    const instantiatedPoc = await installedCli(executable, projectRoot, [
+      "template",
+      "instantiate",
+      "poc",
+      "--input",
+      installedPocInput,
+    ]);
+    const installedTemplateReceipts = [
+      instantiatedBugfix,
+      instantiatedPoc,
+    ];
+    for (
+      const templateId of [
+        "delivery",
+        "vertical-slice",
+        "review-repair",
+        "release",
+      ]
+    ) {
+      const graphId = `installed-template-${templateId}`;
+      const inputFile = path.join(
+        projectRoot,
+        `installed-${templateId}-input.json`,
+      );
+      writeFileSync(
+        inputFile,
+        `${JSON.stringify(
+          installedTemplateInput(
+            graphId,
+            `${graphId}-key`,
+            templateId === "vertical-slice"
+              ? ["security", "performance"]
+              : [],
+          ),
+        )}\n`,
+      );
+      installedTemplateReceipts.push(
+        await installedCli(executable, projectRoot, [
+          "template",
+          "instantiate",
+          templateId,
+          "--input",
+          inputFile,
+        ]),
+      );
+    }
+    expect(installedTemplateReceipts).toHaveLength(6);
+    for (const receipt of installedTemplateReceipts) {
+      const graph = receipt.data.graphs[0];
+      const generatedFile = path.resolve(projectRoot, graph.path);
+      const document = readFileSync(generatedFile, "utf8");
+      expect(statSync(generatedFile).mode & 0o077).toBe(0);
+      expect(
+        createHash("sha256").update(document).digest("hex"),
+      ).toBe(graph.sha256);
+      expect(document).not.toContain(repositoryRoot);
+      expect(document).not.toContain("privacy/");
+      await installedCli(executable, projectRoot, [
+        "graph",
+        "validate",
+        "--input",
+        generatedFile,
+      ]);
+    }
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(
+            projectRoot,
+            ".burn-graph",
+            "graphs",
+            "installed-template-bugfix.json",
+          ),
+          "utf8",
+        ),
+      ).nodes.map((node: any) => node.id),
+    ).toContain("risk-poc");
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(
+            projectRoot,
+            ".burn-graph",
+            "graphs",
+            "installed-template-vertical-slice.json",
+          ),
+          "utf8",
+        ),
+      ).nodes
+        .filter((node: any) => node.id.startsWith("risk-"))
+        .map((node: any) => node.id),
+    ).toEqual(["risk-security", "risk-performance"]);
+    const invalidTemplateInput = path.join(
+      projectRoot,
+      "installed-invalid-template.json",
+    );
+    writeFileSync(
+      invalidTemplateInput,
+      `${JSON.stringify({
+        ...installedTemplateInput(
+          "installed-template-invalid",
+          "installed-template-invalid-key",
+        ),
+        context: { mustRead: ["../private.md"] },
+      })}\n`,
+    );
+    const rejectedTemplate = await command(
+      executable,
+      [
+        "--root",
+        projectRoot,
+        "template",
+        "instantiate",
+        "poc",
+        "--input",
+        invalidTemplateInput,
+      ],
+      { cwd: projectRoot },
+    );
+    expect(rejectedTemplate.exitCode).toBe(1);
+    expect(
+      existsSync(
+        path.join(
+          projectRoot,
+          ".burn-graph",
+          "graphs",
+          "installed-template-invalid.json",
+        ),
+      ),
+    ).toBe(false);
+
+    const installedBugfix = await installedCli(executable, projectRoot, [
+      "run",
+      "start",
+      "installed-template-bugfix",
+      "--actor",
+      "installed-template",
+      "--run-id",
+      "installed:template-bugfix",
+    ]);
+    const installedPoc = await installedCli(executable, projectRoot, [
+      "run",
+      "start",
+      "installed-template-poc",
+      "--actor",
+      "installed-template",
+      "--run-id",
+      "installed:template-poc",
+    ]);
+    await installedCli(executable, projectRoot, [
+      "run",
+      "priority",
+      "installed:template-bugfix",
+      "--value",
+      "high",
+      "--idempotency-key",
+      "installed-template-high",
+    ]);
+    await installedCli(executable, projectRoot, [
+      "run",
+      "priority",
+      "installed:template-poc",
+      "--value",
+      "low",
+      "--idempotency-key",
+      "installed-template-low",
+    ]);
+    const completeTemplate = async (
+      packet: any,
+      route?: string,
+    ): Promise<any> =>
+      installedCli(
+        executable,
+        projectRoot,
+        ["done", "--assignment", packet.assignmentId, "--input", "-"],
+        JSON.stringify({
+          summary: `Completed ${packet.graph.graphId}/${packet.node.id}.`,
+          evidence: [`evidence/${packet.node.id}.json`],
+          ...(route ? { route } : {}),
+        }),
+      );
+    let templateProgress = await completeTemplate(
+      graphAssignment(
+        installedBugfix,
+        "installed-template-bugfix",
+        "reproduce",
+      ),
+    );
+    templateProgress = await completeTemplate(
+      graphAssignment(installedPoc, "installed-template-poc", "frame"),
+    );
+    templateProgress = await completeTemplate(
+      graphAssignment(
+        templateProgress,
+        "installed-template-bugfix",
+        "repair",
+      ),
+    );
+    templateProgress = await completeTemplate(
+      graphAssignment(
+        templateProgress,
+        "installed-template-poc",
+        "experiment",
+      ),
+    );
+    templateProgress = await completeTemplate(
+      graphAssignment(
+        templateProgress,
+        "installed-template-bugfix",
+        "regression",
+      ),
+    );
+    templateProgress = await completeTemplate(
+      graphAssignment(templateProgress, "installed-template-poc", "verify"),
+    );
+    templateProgress = await completeTemplate(
+      graphAssignment(
+        templateProgress,
+        "installed-template-bugfix",
+        "risk-poc",
+      ),
+    );
+    templateProgress = await completeTemplate(
+      graphAssignment(
+        templateProgress,
+        "installed-template-bugfix",
+        "review",
+      ),
+      "pass",
+    );
+    await completeTemplate(
+      graphAssignment(templateProgress, "installed-template-poc", "review"),
+      "pass",
+    );
+    const installedTemplateMetrics = await installedCli(
+      executable,
+      projectRoot,
+      ["inspect", "metrics"],
+    );
+    expect(installedTemplateMetrics.data).toMatchObject({
+      scope: { runCount: 2, rootCount: 2 },
+      assignments: { current: 0, maximumLive: 2 },
+      excludedPrivateFields: [
+        "prompts",
+        "results",
+        "checkOutput",
+        "environment",
+      ],
+    });
+    const installedTemplateTree = await installedCli(
+      executable,
+      projectRoot,
+      ["inspect", "tree", "installed:template-bugfix", "--depth", "0"],
+    );
+    const installedTemplateSvg = await installedCli(
+      executable,
+      projectRoot,
+      [
+        "render",
+        "installed:template-bugfix",
+        "--scope",
+        "tree",
+        "--format",
+        "svg",
+      ],
+    );
+    const installedTemplatePng = await installedCli(
+      executable,
+      projectRoot,
+      [
+        "render",
+        "installed:template-bugfix",
+        "--scope",
+        "tree",
+        "--format",
+        "png",
+      ],
+    );
+    for (const artifact of [installedTemplateSvg, installedTemplatePng]) {
+      expect(artifact.data.projection).toMatchObject({
+        totalRuns: installedTemplateTree.data.projection.totalRuns,
+        renderedNodes: installedTemplateTree.data.projection.renderedNodes,
+        lastEventSequence:
+          installedTemplateTree.data.projection.lastEventSequence,
+      });
+    }
+
     await installedCli(executable, projectRoot, [
       "graph",
       "apply",
@@ -658,6 +1060,19 @@ describe("lightweight Bun package", () => {
         { method: "POST" },
       );
       expect(mutation.status).toBe(405);
+      const portfolioResponse = await fetch(
+        `http://127.0.0.1:${viewerPort}/api/snapshot`,
+      );
+      expect(portfolioResponse.status).toBe(200);
+      const portfolioEnvelope = (await portfolioResponse.json()) as any;
+      expect(
+        portfolioEnvelope.data.metrics.scope.runCount,
+      ).toBeGreaterThanOrEqual(installedTemplateMetrics.data.scope.runCount);
+      expect(
+        portfolioEnvelope.data.metrics.assignments.maximumLive,
+      ).toBeGreaterThanOrEqual(
+        installedTemplateMetrics.data.assignments.maximumLive,
+      );
       const treeResponse = await fetch(
         `http://127.0.0.1:${viewerPort}/api/trees/${encodeURIComponent("installed:wide")}?depth=0&limit=500`,
       );
@@ -673,6 +1088,22 @@ describe("lightweight Bun package", () => {
             renderedNodes: 100,
           },
         },
+      });
+      const templateTreeResponse = await fetch(
+        `http://127.0.0.1:${viewerPort}/api/trees/${encodeURIComponent("installed:template-bugfix")}?depth=0&limit=500`,
+      );
+      expect(templateTreeResponse.status).toBe(200);
+      const templateTreeEnvelope = (await templateTreeResponse.json()) as any;
+      expect(templateTreeEnvelope.data.projection).toMatchObject({
+        depth: installedTemplateTree.data.projection.depth,
+        maximumDepth: installedTemplateTree.data.projection.maximumDepth,
+        limit: installedTemplateTree.data.projection.limit,
+        totalRuns: installedTemplateTree.data.projection.totalRuns,
+        expandedRuns: installedTemplateTree.data.projection.expandedRuns,
+        foldedRuns: installedTemplateTree.data.projection.foldedRuns,
+        renderedNodes: installedTemplateTree.data.projection.renderedNodes,
+        lastEventSequence:
+          installedTemplateTree.data.projection.lastEventSequence,
       });
     } finally {
       await installedCli(executable, projectRoot, [
@@ -702,6 +1133,10 @@ describe("lightweight Bun package", () => {
           installedCliParallelNodes: 2,
           packagedRendererFormat: rendered.data.format,
           packagedRendererBytes: rendered.data.bytes,
+          packagedTemplateSvgBytes: installedTemplateSvg.data.bytes,
+          packagedTemplatePngBytes: installedTemplatePng.data.bytes,
+          packagedTemplateProjection:
+            installedTemplateTree.data.projection.renderedNodes,
           packagedHundredNodeFormat: installedWideRender.data.format,
           packagedHundredNodeBytes: installedWideRender.data.bytes,
           packagedViewerHealth: 200,

@@ -73,21 +73,33 @@ Decision route, summary, and evidence.
 | Area | Commands |
 |---|---|
 | Project | `init`, `doctor`, `help` |
+| Templates | `template list`, `template show`, `template instantiate` |
 | GraphSpec | `graph validate`, `graph apply`, `graph list`, `graph show`, `graph clone` |
 | CheckSpec | `check validate`, `check apply`, `check list`, `check show` |
-| Run lifecycle | `run start`, `run pause`, `run resume`, `run cancel` |
+| Run lifecycle | `run start`, `run pause`, `run resume`, `run cancel`, `run priority` |
 | Normal loop | `next`, `current`, `focus`, `done` |
 | External outcome | `signal resolve` |
 | Artifact | `render` with `run` or `tree` scope |
-| Inspection | `inspect overview`, `inspect run`, `inspect tree`, `inspect node`, `inspect ready`, `inspect waits`, `inspect resources`, `inspect executions`, `inspect mermaid`, `inspect events` |
+| Inspection | `inspect overview`, `inspect run`, `inspect tree`, `inspect node`, `inspect ready`, `inspect waits`, `inspect resources`, `inspect metrics`, `inspect executions`, `inspect mermaid`, `inspect events` |
 | Recovery | `recover heartbeat`, `recover checkpoint`, `recover block`, `recover unblock`, `recover release`, `recover fail`, `recover reconcile` |
 | Human Viewer | `viewer start`, `viewer status`, `viewer stop` |
 
 The Runtime chooses nodes. There is no public command that directly claims a
 named Ready node. Scheduling is transactional, respects each Graph's
 `maxActive`, caps one Actor at eight live Assignments, ranks matching
-`actorHint` first, and rotates deterministically across Runs. Concurrent `next`
-calls cannot create duplicate live Assignments.
+`actorHint` first, and rotates deterministically across root Run trees.
+Low/normal/high priority affects order, while five-minute aging prevents an
+older eligible root from starving. Concurrent `next` calls cannot create
+duplicate live Assignments.
+
+Task, dynamic Subgraph, and Gate resource ownership is exclusive and acquired
+in the same transaction as the Assignment or Check execution. Inspect
+contention without claiming it:
+
+```bash
+burn-graph inspect ready --actor primary
+burn-graph inspect resources
+```
 
 Normal-loop responses are bounded: at most eight complete Assignment packets,
 eight relevant Run summaries, and 32 Ready preview rows. `activeRunCount` and
@@ -101,6 +113,8 @@ burn-graph run pause delivery --idempotency-key pause-20260730-1
 burn-graph run resume delivery --actor primary \
   --idempotency-key resume-20260730-1
 burn-graph run cancel delivery --idempotency-key cancel-20260730-1
+burn-graph run priority delivery --value high \
+  --idempotency-key priority-20260730-1
 ```
 
 Pause suppresses new scheduling across the selected Run subtree while existing
@@ -126,6 +140,32 @@ conflicting content or a cancelled Signal cannot unlock work.
 Public events and normal-loop responses never contain Check stdout/stderr.
 Use `inspect executions --include-output --output-bytes <1..16384>` for an
 explicit bounded local diagnostic view.
+
+## Templates and portfolio inspection
+
+```bash
+burn-graph template list
+burn-graph template show bugfix
+burn-graph template instantiate bugfix --input template-input.json
+
+burn-graph inspect overview --root-run delivery --depth 1
+burn-graph inspect overview --node-status ready,running \
+  --actor primary --tag review --resource rust-build \
+  --priority high --limit 50
+burn-graph inspect metrics
+```
+
+Template instantiation validates the entire generated set before atomically
+writing normalized GraphSpec JSON and immutable revisions. A stable
+idempotency key makes equivalent retry inert.
+
+Overview rows and totals come from one read snapshot. Filters cover Run/root,
+exact hierarchy depth, Run status, multiple Node statuses, Actor, tag,
+resource, and root priority. `totals` distinguishes matching and listed rows;
+`truncated.runs` and `truncated.nodes` make every bound explicit.
+
+Metrics expose only durable operational facts. Prompt/result text, Check
+stdout/stderr, and environment values are never inputs to this projection.
 
 ## Graph artifacts
 
@@ -176,6 +216,7 @@ burn-graph done --help
 burn-graph help ai-loop
 burn-graph help graph-spec
 burn-graph help lifecycle
+burn-graph help templates
 burn-graph help inspect
 burn-graph help render
 burn-graph help recover

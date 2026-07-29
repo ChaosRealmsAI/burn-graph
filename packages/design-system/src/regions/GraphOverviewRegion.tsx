@@ -3,6 +3,7 @@ import { ConnectionBadge } from "../components/ConnectionBadge.tsx";
 import { GraphCard } from "../components/GraphCard.tsx";
 import type {
   GraphSummaryView,
+  PortfolioMetricsView,
   ViewerConnection,
 } from "../types.ts";
 
@@ -10,11 +11,13 @@ export function GraphOverviewRegion({
   graphs,
   selectedGraphId,
   connection,
+  metrics = null,
   onSelect,
 }: {
   readonly graphs: readonly GraphSummaryView[];
   readonly selectedGraphId: string | null;
   readonly connection: ViewerConnection;
+  readonly metrics?: PortfolioMetricsView | null;
   readonly onSelect: (graphId: string) => void;
 }) {
   const running = graphs.reduce(
@@ -66,6 +69,26 @@ export function GraphOverviewRegion({
             <dt>Waiting</dt>
             <dd>{waiting}</dd>
           </div>
+          {metrics ? (
+            <>
+              <div>
+                <dt>Peak live</dt>
+                <dd>{metrics.maximumLiveAssignments}</dd>
+              </div>
+              <div>
+                <dt>Locks</dt>
+                <dd>{metrics.activeResources}</dd>
+              </div>
+              <div>
+                <dt>Contended</dt>
+                <dd>{metrics.contendedNodes}</dd>
+              </div>
+              <div>
+                <dt>Attempts / recoveries</dt>
+                <dd>{metrics.attempts} / {metrics.recoveries}</dd>
+              </div>
+            </>
+          ) : null}
         </dl>
       </div>
 

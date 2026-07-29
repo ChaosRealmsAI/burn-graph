@@ -56,6 +56,14 @@ export interface GraphSummaryView {
   readonly updatedAt: string;
 }
 
+export interface PortfolioMetricsView {
+  readonly activeResources: number;
+  readonly contendedNodes: number;
+  readonly maximumLiveAssignments: number;
+  readonly attempts: number;
+  readonly recoveries: number;
+}
+
 export interface NodeView {
   readonly id: string;
   readonly title: string;

@@ -1,7 +1,10 @@
 export * from "./contracts.ts";
 export * from "./gate.ts";
 export * from "./mermaid.ts";
+export * from "./metrics.ts";
 export * from "./project.ts";
+export * from "./scheduler.ts";
+export * from "./template-service.ts";
 export type { BurnGraphServiceOptions } from "./service.ts";
 export { BurnGraphService } from "./system-node-service.ts";
 export * from "./validator.ts";

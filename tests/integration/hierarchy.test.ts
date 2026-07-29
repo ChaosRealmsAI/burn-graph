@@ -1095,7 +1095,9 @@ describe("hierarchical Run convergence", () => {
         },
       });
       expect(folded.runs.map((entry) => entry.folded)).toEqual([false, true]);
-      expect(folded.mermaid).toContain("running · 1/5 · +1 · middle");
+      expect(folded.mermaid).toContain(
+        "running · normal · 1/5 · +1 · middle",
+      );
       expect(folded.mermaid).toContain("projection-root-run");
       expect(folded.mermaid).not.toContain("projection-leaf-run");
 

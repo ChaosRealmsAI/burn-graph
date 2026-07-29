@@ -1,0 +1,386 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-dev7-portfolio",
+  "title": "Deliver dev.7 Portfolio Control",
+  "goal": "Ship fair multi-root scheduling, exact resource ownership, bounded event-derived metrics, and truthful portfolio projections.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start portfolio slice",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "scheduler-contract"
+        },
+        {
+          "to": "contention-poc"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "portfolio"
+      ]
+    },
+    {
+      "id": "scheduler-contract",
+      "type": "task",
+      "title": "Make portfolio contracts executable",
+      "prompt": {
+        "objective": "Define fixed-clock tests for cross-root rotation, low/normal/high priority, five-minute aging, oldest-root fairness, resource ownership, projections, and metrics.",
+        "instructions": [
+          "Separate policy scoring from transactional claiming.",
+          "Make starvation and duplicate-lock controls deterministic.",
+          "Require read-only projections to preserve revision and event count."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "../privacy/slices/S13-portfolio-control/versions/0.1.0-dev.7/plan.md",
+          "packages/core/src/service.ts",
+          "packages/core/src/system-node-service.ts",
+          "packages/core/src/storage.ts"
+        ],
+        "doneWhen": [
+          "Known-red fairness, aging, contention, expiry, and read-only tests exist.",
+          "Metrics fields are derived only from durable state and events.",
+          "Bounds and truncation are explicit in every projection."
+        ],
+        "outputSchema": null,
+        "role": "S13 contract owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S07-templates-control.feature"
+        ],
+        "writablePaths": [
+          "tests/scheduler",
+          "tests/metrics"
+        ],
+        "forbidden": [
+          "Do not couple scheduler order to SQLite row accident.",
+          "Do not derive metrics from prompt or result text."
+        ],
+        "runtime": [
+          "bun test tests/scheduler tests/metrics"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "portfolio",
+        "contract"
+      ],
+      "resources": []
+    },
+    {
+      "id": "contention-poc",
+      "type": "task",
+      "title": "Prove fair resource scheduling",
+      "prompt": {
+        "objective": "Use two roots and a fixed clock to prove one shared resource serializes only conflicts while unrelated and aged low-priority work advances.",
+        "instructions": [
+          "Claim inside one SQLite transaction.",
+          "Inspect an explicit contention reason.",
+          "Reconcile expiry without sleeps."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "packages/core/src/service.ts",
+          "packages/core/src/system-node-service.ts"
+        ],
+        "doneWhen": [
+          "Two owners never hold one resource.",
+          "Unrelated work schedules while one root is contended.",
+          "Low priority advances after bounded fixed-clock aging."
+        ],
+        "outputSchema": null,
+        "role": "S13 scheduler PoC owner",
+        "lockedContracts": [
+          "../privacy/architecture.md"
+        ],
+        "writablePaths": [
+          "pocs/portfolio-scheduler",
+          "tests/scheduler"
+        ],
+        "forbidden": [
+          "Do not use wall-clock sleep.",
+          "Do not acquire resources outside Assignment creation."
+        ],
+        "runtime": [
+          "bun test tests/scheduler"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "portfolio",
+        "poc"
+      ],
+      "resources": []
+    },
+    {
+      "id": "contract-join",
+      "type": "join",
+      "title": "Converge portfolio oracles",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "portfolio-implement"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "portfolio"
+      ]
+    },
+    {
+      "id": "portfolio-implement",
+      "type": "task",
+      "title": "Implement portfolio scheduler and metrics",
+      "prompt": {
+        "objective": "Implement priority mutation, fair cross-root scheduling, Task and dynamic-Subgraph resources, lease recovery, filtered inspection, event-derived metrics, and Viewer/render truth.",
+        "instructions": [
+          "Keep scheduler policy and metrics in cohesive modules.",
+          "Acquire resources and create Assignments in one transaction.",
+          "Rotate roots before descendants and apply five-minute aging.",
+          "Return exact totals and explicit truncation from one snapshot."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M07-template-portfolio.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "packages/core/src/service.ts",
+          "packages/core/src/system-node-service.ts",
+          "packages/core/src/contracts.ts",
+          "apps/cli/src/index.ts",
+          "apps/viewer/src",
+          "packages/design-system/src"
+        ],
+        "doneWhen": [
+          "run priority is idempotent and accepts only low, normal, or high.",
+          "Repeated next is fair across roots and never duplicates a claim.",
+          "Task, dynamic Subgraph, and Gate resources have one exact owner lifecycle.",
+          "inspect metrics and portfolio filters remain bounded, truthful, and read-only."
+        ],
+        "outputSchema": null,
+        "role": "S13 implementation owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S07-templates-control.feature"
+        ],
+        "writablePaths": [
+          "packages/core/src/scheduler.ts",
+          "packages/core/src/metrics.ts",
+          "packages/core/src/service.ts",
+          "packages/core/src/system-node-service.ts",
+          "packages/core/src/storage.ts",
+          "apps/cli/src/index.ts",
+          "apps/viewer",
+          "packages/design-system",
+          "tests/scheduler",
+          "tests/metrics",
+          "tests/e2e"
+        ],
+        "forbidden": [
+          "No second scheduler state source.",
+          "No resource overlap or hidden deadlock.",
+          "No prompt, result, command output, or environment value in metrics."
+        ],
+        "runtime": [
+          "bun run check",
+          "bun test tests/scheduler tests/metrics"
+        ]
+      },
+      "next": [
+        {
+          "to": "portfolio-self-verify"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "portfolio",
+        "implement"
+      ],
+      "resources": []
+    },
+    {
+      "id": "portfolio-self-verify",
+      "type": "task",
+      "title": "Verify fairness, recovery, and projections",
+      "prompt": {
+        "objective": "Run deterministic fairness, contention, assignment expiry, lifecycle release, metrics privacy, filter consistency, SVG/PNG, and isolated-package UP09.",
+        "instructions": [
+          "Include high, normal, low, shared-resource, and unrelated roots.",
+          "Compare CLI, Viewer snapshot, SVG metadata, and PNG source totals.",
+          "Record five-sample bounded performance."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "tests/scheduler",
+          "tests/metrics",
+          "tests/e2e",
+          "scripts/verify"
+        ],
+        "doneWhen": [
+          "No duplicate work or resource overlap occurs.",
+          "Aged low priority advances within the deterministic bound.",
+          "All projections and metrics agree without mutation.",
+          "Source and isolated-package UP09 pass."
+        ],
+        "outputSchema": null,
+        "role": "S13 self-verifier",
+        "lockedContracts": [
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature"
+        ],
+        "writablePaths": [
+          "tests/scheduler",
+          "tests/metrics",
+          "tests/e2e",
+          "scripts/verify"
+        ],
+        "forbidden": [
+          "Do not use average-only performance evidence.",
+          "Do not inspect private runtime text."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "portfolio-review"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "portfolio",
+        "verify"
+      ],
+      "resources": []
+    },
+    {
+      "id": "portfolio-review",
+      "type": "decision",
+      "title": "Accept or repair portfolio control",
+      "prompt": {
+        "objective": "Select pass only when S13 passes starvation, concurrency, lock lifecycle, metrics privacy, bounds, visual truth, performance, and package review.",
+        "instructions": [
+          "Choose repair for any duplicate claim, starvation, resource overlap, leaked private field, silent truncation, read-only mutation, or projection disagreement."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M07-template-portfolio.md",
+          "../privacy/user-paths/UP09-template-portfolio.md",
+          "../privacy/bdd/S07-templates-control.feature",
+          "../privacy/project.json",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "All S13 checks and installed-package UP09 pass.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "S13 quality decision",
+        "lockedContracts": [
+          "../privacy/milestones/M07-template-portfolio.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass from one scheduling fixture alone."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass"
+        },
+        {
+          "to": "portfolio-implement",
+          "route": "repair",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev7",
+        "portfolio",
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Portfolio control ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev7",
+        "portfolio"
+      ]
+    }
+  ]
+}

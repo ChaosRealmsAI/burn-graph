@@ -10,7 +10,7 @@ unlocks and returns successors across parallel nodes and multiple graphs.
 With Bun 1.2.17 or newer, installation is one local package command:
 
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.6.tgz
+bun add --global ./burn-graph-0.1.0-dev.7.tgz
 burn-graph --version
 ```
 
@@ -22,6 +22,9 @@ repository, run `bun run install:local`.
 
 ```bash
 burn-graph init
+burn-graph template list
+burn-graph template instantiate vertical-slice --input template-input.json
+# Or author directly:
 burn-graph graph apply --input graph.json
 burn-graph run start delivery --actor main
 # Execute every returned Assignment prompt, then:
@@ -29,6 +32,7 @@ burn-graph done --assignment <id> --input result.json
 # Done returns the next zero or more Assignments automatically.
 burn-graph current --actor main
 burn-graph inspect overview
+burn-graph inspect metrics
 burn-graph render delivery
 burn-graph viewer start delivery --port 4173 --open
 ```
@@ -53,7 +57,9 @@ JSON envelope. Start with `burn-graph --help` or
 `burn-graph help ai-loop`.
 
 See [installation](docs/install.md), [the CLI contract](docs/cli.md), and the
-[GraphSpec reference](docs/graph-spec.md).
+[GraphSpec reference](docs/graph-spec.md). Template, priority, resource, and
+portfolio behavior is documented in
+[template portfolio control](docs/template-portfolio.md).
 
 ## Repository boundary
 

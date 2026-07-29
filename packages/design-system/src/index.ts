@@ -10,6 +10,7 @@ export type {
   GraphHierarchyView,
   GraphSummaryView,
   NodeView,
+  PortfolioMetricsView,
   ViewerConnection,
   VisualGraphStatus,
   VisualNodeStatus,
