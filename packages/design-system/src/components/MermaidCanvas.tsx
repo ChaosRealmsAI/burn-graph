@@ -1,26 +1,6 @@
-import mermaid from "mermaid";
 import { useEffect, useId, useRef, useState } from "react";
 
-mermaid.initialize({
-  startOnLoad: false,
-  securityLevel: "strict",
-  theme: "base",
-  flowchart: {
-    curve: "basis",
-    htmlLabels: false,
-    padding: 18,
-  },
-  themeVariables: {
-    background: "#0d111a",
-    primaryColor: "#171d2a",
-    primaryTextColor: "#f3f6fb",
-    primaryBorderColor: "#364156",
-    lineColor: "#526078",
-    secondaryColor: "#121722",
-    tertiaryColor: "#080b12",
-    fontFamily: "Inter, ui-sans-serif, sans-serif",
-  },
-});
+import { renderMermaidSvg } from "../mermaid-browser.ts";
 
 export function MermaidCanvas({
   source,
@@ -37,8 +17,7 @@ export function MermaidCanvas({
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    void mermaid
-      .render(renderId, source)
+    void renderMermaidSvg(renderId, source)
       .then(({ svg }) => {
         if (cancelled || !container.current) return;
         container.current.innerHTML = svg;

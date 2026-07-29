@@ -1,0 +1,10 @@
+{
+  "name": "@burn-graph/render",
+  "version": "0.1.0-dev.4",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  }
+}

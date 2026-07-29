@@ -1,0 +1,252 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-render-artifact",
+  "title": "Converge package-internal graph rendering",
+  "goal": "Prove burn-graph itself owns safe cached SVG and PNG artifacts without consumer integration or control of existing user processes.",
+  "revision": 1,
+  "maxActive": 4,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start render closure",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "contract-proof"
+        },
+        {
+          "to": "renderer-proof"
+        },
+        {
+          "to": "blackbox-proof"
+        },
+        {
+          "to": "package-proof"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "contract-proof",
+      "type": "task",
+      "title": "Verify rendering contracts",
+      "prompt": {
+        "objective": "Confirm UP05, BDD S04, architecture, CLI Help, and public documentation define one package-owned read-only rendering contract.",
+        "instructions": [
+          "Compare formal Product Private truth with the public JSON surfaces.",
+          "Treat consumer-owned rendering or arbitrary output paths as blockers."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP05-render-graph-artifact.md",
+          "../privacy/bdd/S04-render-artifact.feature",
+          "../privacy/architecture.md",
+          "docs/cli.md"
+        ],
+        "doneWhen": [
+          "SVG is default and PNG is optional.",
+          "Output is bounded metadata with a project-relative cache path.",
+          "Rendering does not mutate Run revision or events."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "contracts",
+        "docs"
+      ]
+    },
+    {
+      "id": "renderer-proof",
+      "type": "task",
+      "title": "Review renderer safety and cache",
+      "prompt": {
+        "objective": "Verify shared Mermaid assets, cache identity, atomic convergence, SVG and PNG validation, isolated browser lifecycle, and exact cleanup.",
+        "instructions": [
+          "Review the real implementation and focused tests.",
+          "Treat attachment to an existing browser, broad process termination, unsafe SVG, or partial cache acceptance as blockers."
+        ],
+        "mustRead": [
+          "packages/render/src/index.ts",
+          "packages/render/src/browser.ts",
+          "packages/render/src/cache.ts",
+          "packages/render/src/validation.ts"
+        ],
+        "doneWhen": [
+          "Viewer and renderer share one Mermaid configuration and asset graph.",
+          "Cache hits validate bytes and hash before bypassing the browser.",
+          "Only the exact isolated child is stopped and its profile is removed."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "renderer",
+        "security"
+      ]
+    },
+    {
+      "id": "blackbox-proof",
+      "type": "task",
+      "title": "Replay rendering through the CLI",
+      "prompt": {
+        "objective": "Prove source CLI rendering, cache reuse without a browser, concurrent PNG convergence, revision pruning, missing-browser recovery, and 100-node bounds.",
+        "instructions": [
+          "Use the public CLI as the mutation and artifact entry.",
+          "Compare Run revision and events before and after rendering."
+        ],
+        "mustRead": [
+          "tests/e2e/render-workflow.test.ts",
+          "scripts/verify/render-performance.ts"
+        ],
+        "doneWhen": [
+          "Real-browser E2E passes for SVG and PNG.",
+          "Five cold and cached 100-node samples pass their budgets.",
+          "Missing browser degrades only rendering and leaves no partial artifact."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "cli",
+        "blackbox",
+        "performance"
+      ]
+    },
+    {
+      "id": "package-proof",
+      "type": "task",
+      "title": "Verify the installed renderer package",
+      "prompt": {
+        "objective": "Build and install dev.4 outside the source tree and prove packaged rendering remains zero-dependency and within size budgets.",
+        "instructions": [
+          "Use the isolated installer E2E and inspect the exact archive.",
+          "Treat missing renderer assets or Product Private package content as blockers."
+        ],
+        "mustRead": [
+          "scripts/build/package.ts",
+          "tests/e2e/install-workflow.test.ts",
+          "docs/install.md"
+        ],
+        "doneWhen": [
+          "The installed CLI renders a real SVG from packaged assets.",
+          "Archive is below 2 MiB and installed content below 5 MiB.",
+          "The package declares zero dependencies and excludes Product Private files."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "package",
+        "install"
+      ]
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "title": "Converge render evidence",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "quality-gate"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "quality-gate",
+      "type": "decision",
+      "title": "Accept or repair rendering",
+      "prompt": {
+        "objective": "Choose pass only when every M04 rendering exit gate has concrete evidence and no blocker remains.",
+        "instructions": [
+          "Use the final diff, full verification, package measurements, and this Run's rendered artifact.",
+          "Route repair for any confirmed CLI, safety, cache, package, or performance blocker."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M04-package-internal-rendering.md",
+          "../privacy/project.json"
+        ],
+        "doneWhen": [
+          "Exactly one declared route is returned with concrete evidence."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "all render gates pass"
+        },
+        {
+          "to": "renderer-proof",
+          "route": "repair",
+          "label": "repair internal renderer",
+          "maxTraversals": 1
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "decision",
+        "quality"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Package rendering verified",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

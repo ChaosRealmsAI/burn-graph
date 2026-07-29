@@ -70,6 +70,7 @@ Decision route, summary, and evidence.
 | GraphSpec | `graph validate`, `graph apply`, `graph list`, `graph show`, `graph clone` |
 | Run lifecycle | `run start`, `run pause`, `run resume`, `run cancel` |
 | Normal loop | `next`, `current`, `focus`, `done` |
+| Artifact | `render` |
 | Inspection | `inspect overview`, `inspect run`, `inspect node`, `inspect ready`, `inspect mermaid`, `inspect events` |
 | Recovery | `recover heartbeat`, `recover checkpoint`, `recover block`, `recover unblock`, `recover release`, `recover fail`, `recover reconcile` |
 | Human Viewer | `viewer start`, `viewer status`, `viewer stop` |
@@ -90,6 +91,25 @@ remain reportable. Lease expiry preserves the Attempt; `next` reconciles it
 automatically, and `recover reconcile [run-or-graph]` exposes the exceptional
 path explicitly.
 
+## Graph artifacts
+
+```bash
+burn-graph render delivery
+burn-graph render delivery --format png
+```
+
+`render` reads the canonical Run snapshot and returns bounded metadata for a
+file beneath `.burn-graph/runtime/renders/`. SVG is the default. Metadata
+includes the Run and Graph IDs, runtime revision, source hash, project-relative
+artifact path, dimensions, bytes, SHA-256, cache status, and renderer versions.
+It does not change Run revision or events.
+
+A cache miss launches a new Chrome-family headless child with an ephemeral
+profile and loopback-only static page. burn-graph stops only that exact child.
+Set `BURN_GRAPH_CHROME_BIN` when automatic discovery is unavailable. A
+validated cache hit does not require a browser. `doctor` reports this as
+`capabilities.render`; browser absence does not make core health fail.
+
 ## Progressive Help
 
 ```bash
@@ -99,6 +119,7 @@ burn-graph done --help
 burn-graph help ai-loop
 burn-graph help graph-spec
 burn-graph help inspect
+burn-graph help render
 burn-graph help recover
 burn-graph help errors
 ```
@@ -116,7 +137,7 @@ fail as invalid arguments: `work`, top-level `events`, top-level `mermaid`,
 .burn-graph/
 ├── config.json
 ├── graphs/          # normalized, versionable GraphSpecs
-└── runtime/         # ignored SQLite, WAL, Viewer records, and logs
+└── runtime/         # ignored SQLite, WAL, Viewer records, and render cache
 ```
 
 Every Run pins an immutable GraphSpec revision. Editing JSON does not mutate a

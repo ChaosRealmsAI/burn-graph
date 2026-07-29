@@ -14,6 +14,11 @@ import {
   type RuntimeChange,
   type WorkSchedule,
 } from "@burn-graph/core";
+import {
+  inspectRenderCapability,
+  renderGraphArtifact,
+  type RenderFormat,
+} from "@burn-graph/render";
 import { Command, Option } from "commander";
 import { ZodError } from "zod";
 
@@ -24,7 +29,7 @@ import {
   viewerInstanceStatus,
 } from "./viewer-runtime.ts";
 
-const VERSION = "0.1.0-dev.3";
+const VERSION = "0.1.0-dev.4";
 const GRAPH_STATUSES: readonly GraphStatus[] = [
   "draft",
   "running",
@@ -465,6 +470,48 @@ program
             ],
     });
   });
+
+program
+  .command("render")
+  .description("materialize one Run as a cached SVG or PNG artifact")
+  .argument("<run-or-graph>")
+  .addOption(
+    new Option("--format <format>", "artifact format")
+      .choices(["svg", "png"])
+      .default("svg"),
+  )
+  .action(
+    async (
+      reference: string,
+      options: { format: RenderFormat },
+    ) => {
+      const root = discoverProjectRoot(
+        globalOptions().root ?? process.cwd(),
+      );
+      const snapshot = (() => {
+        const service = new BurnGraphService(root);
+        try {
+          return service.getSnapshot(reference, 0);
+        } finally {
+          service.close();
+        }
+      })();
+      const data = await renderGraphArtifact({
+        projectRoot: root,
+        snapshot,
+        format: options.format,
+      });
+      success("render", data, {
+        nextActions: [
+          {
+            id: "inspect-run",
+            command: `burn-graph inspect run ${snapshot.summary.runId}`,
+            description: "Inspect the canonical Run behind this projection.",
+          },
+        ],
+      });
+    },
+  );
 
 program
   .command("focus")
@@ -945,6 +992,9 @@ program
         runCount: snapshot.runs.length,
         staleClaims,
         healthy: staleClaims === 0,
+        capabilities: {
+          render: inspectRenderCapability(),
+        },
       };
     });
     success("doctor", data, {
@@ -981,6 +1031,23 @@ const helpDetails = new Map<string, HelpDetail>([
   ["run.cancel", { mutates: true }],
   ["next", { mutates: true, output: "WorkSchedule with AssignmentPacket[]" }],
   ["current", { mutates: false, output: "Actor focus and complete AssignmentPacket[]" }],
+  [
+    "render",
+    {
+      mutates: false,
+      output:
+        "Cached SVG or PNG metadata with project-relative artifact, hash, dimensions, revision, and renderer versions",
+      errors: [
+        "RUN_NOT_FOUND",
+        "RENDERER_UNAVAILABLE",
+        "RENDER_ASSETS_MISSING",
+        "RENDER_TIMEOUT",
+        "RENDER_FAILED",
+        "INVALID_RENDER_OUTPUT",
+        "RENDER_OUTPUT_TOO_LARGE",
+      ],
+    },
+  ],
   ["focus", { mutates: true, output: "Focused AssignmentPacket" }],
   [
     "done",
@@ -1072,6 +1139,18 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "inspect ready",
       "inspect mermaid",
       "inspect events",
+    ],
+  },
+  render: {
+    title: "Project-local graph artifacts",
+    default: "burn-graph render <run-or-graph>",
+    formats: ["svg", "png"],
+    storage: ".burn-graph/runtime/renders/",
+    invariants: [
+      "The returned path is relative to the project root.",
+      "Rendering never changes Run revision or events.",
+      "Validated cache hits do not require a browser.",
+      "A cache miss uses only a new isolated headless browser child.",
     ],
   },
   recover: {
@@ -1226,7 +1305,7 @@ function helpPayload(
           groups: {
             author: ["init", "graph"],
             execute: ["run", "next", "current", "focus", "done"],
-            observe: ["inspect", "viewer"],
+            observe: ["inspect", "render", "viewer"],
             recover: ["recover", "doctor"],
             learn: Object.keys(helpTopics).map(
               (topic) => `burn-graph help ${topic}`,
@@ -1321,6 +1400,23 @@ function recoveryActions(error: BurnGraphError): readonly NextAction[] {
         id: "init",
         command: "burn-graph init",
         description: "Initialize this project before other commands.",
+      },
+    ];
+  }
+  if (
+    error.code === "RENDERER_UNAVAILABLE" ||
+    error.code === "RENDER_ASSETS_MISSING"
+  ) {
+    return [
+      {
+        id: "doctor",
+        command: "burn-graph doctor",
+        description: "Inspect the optional render capability and recovery.",
+      },
+      {
+        id: "render-help",
+        command: "burn-graph help render",
+        description: "Inspect the package-internal rendering contract.",
       },
     ];
   }

@@ -8,8 +8,12 @@ second JavaScript runtime.
 
 Prerequisite: Bun 1.2.17 or newer.
 
+Uncached SVG or PNG rendering also needs a local Chrome-family executable.
+Core graph commands, cached artifacts, and Viewer serving remain available
+without it.
+
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.3.tgz
+bun add --global ./burn-graph-0.1.0-dev.4.tgz
 burn-graph --version
 ```
 
@@ -24,7 +28,7 @@ bun run install:local
 ```
 
 `install:local` builds the CLI and Viewer, creates
-`dist/releases/burn-graph-0.1.0-dev.3.tgz`, and installs that exact archive.
+`dist/releases/burn-graph-0.1.0-dev.4.tgz`, and installs that exact archive.
 
 An isolated prefix is available for clean-room checks:
 
@@ -35,7 +39,7 @@ bun scripts/install/local.ts --prefix /tmp/burn-graph-install
 ```
 
 The isolated installer test verifies package size, zero package dependencies,
-parallel Assignment scheduling, persisted state, packaged Viewer lifecycle,
-and read-only HTTP behavior. `--prefix` and `BUN_INSTALL` must resolve outside
-the source repository because Bun 1.2.17 may otherwise treat the source
-manifest as the global install target.
+parallel Assignment scheduling, persisted state, packaged SVG rendering,
+Viewer lifecycle, and read-only HTTP behavior. `--prefix` and `BUN_INSTALL`
+must resolve outside the source repository because Bun 1.2.17 may otherwise
+treat the source manifest as the global install target.

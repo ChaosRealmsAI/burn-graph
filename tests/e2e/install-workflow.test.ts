@@ -14,6 +14,7 @@ import {
   createTestDirectory,
   parallelGraph,
   removeTestProject,
+  wideGraph,
 } from "../helpers/fixtures.ts";
 
 interface CommandResult {
@@ -27,7 +28,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.3.tgz",
+  "burn-graph-0.1.0-dev.4.tgz",
 );
 const roots: string[] = [];
 
@@ -98,6 +99,14 @@ describe("lightweight Bun package", () => {
   test("installs without dependencies and runs CLI state plus packaged Viewer", async () => {
     expect(existsSync(archiveFile)).toBe(true);
     expect(statSync(archiveFile).size).toBeLessThan(2_000_000);
+    const archiveListing = await command("tar", ["-tzf", archiveFile], {
+      cwd: repositoryRoot,
+    });
+    expect(archiveListing.exitCode, archiveListing.stderr).toBe(0);
+    expect(archiveListing.stdout).toContain("package/viewer/render.html");
+    expect(archiveListing.stdout).not.toMatch(
+      /(?:^|\/)(?:privacy|bdd|milestones|slices|issues|feedback)(?:\/|$)|product\.md/,
+    );
 
     const testRoot = createTestDirectory();
     roots.push(testRoot);
@@ -190,7 +199,7 @@ describe("lightweight Bun package", () => {
       schemaVersion: 1,
       ok: true,
       command: "version",
-      data: { version: "0.1.0-dev.3" },
+      data: { version: "0.1.0-dev.4" },
     });
 
     const installedPackage = path.join(
@@ -242,6 +251,18 @@ describe("lightweight Bun package", () => {
       "installed:smoke",
     ]);
     expect(overlapping.data.summary.counts.running).toBe(2);
+    const rendered = await installedCli(executable, projectRoot, [
+      "render",
+      "installed:smoke",
+    ]);
+    expect(rendered.data).toMatchObject({
+      runId: "installed:smoke",
+      format: "svg",
+      cached: false,
+    });
+    expect(
+      existsSync(path.resolve(projectRoot, rendered.data.artifact)),
+    ).toBe(true);
 
     await Promise.all([
       installedCli(
@@ -275,6 +296,39 @@ describe("lightweight Bun package", () => {
       "installed:smoke",
     ]);
     expect(completed.data.summary.status).toBe("completed");
+
+    const wideGraphFile = path.join(projectRoot, "wide-graph.json");
+    writeFileSync(
+      wideGraphFile,
+      `${JSON.stringify(wideGraph("installed-wide", 97))}\n`,
+    );
+    await installedCli(executable, projectRoot, [
+      "graph",
+      "apply",
+      "--input",
+      wideGraphFile,
+    ]);
+    await installedCli(executable, projectRoot, [
+      "run",
+      "start",
+      "installed-wide",
+      "--actor",
+      "installed",
+      "--run-id",
+      "installed:wide",
+    ]);
+    const installedWideRender = await installedCli(
+      executable,
+      projectRoot,
+      ["render", "installed:wide", "--format", "png"],
+    );
+    expect(installedWideRender.data).toMatchObject({
+      graphId: "installed-wide",
+      format: "png",
+      cached: false,
+    });
+    expect(installedWideRender.data.width).toBeLessThanOrEqual(2400);
+    expect(installedWideRender.data.height).toBeLessThanOrEqual(1600);
 
     const probe = Bun.serve({
       hostname: "127.0.0.1",
@@ -338,6 +392,10 @@ describe("lightweight Bun package", () => {
           runtimeDependencies: 0,
           installMilliseconds,
           installedCliParallelNodes: 2,
+          packagedRendererFormat: rendered.data.format,
+          packagedRendererBytes: rendered.data.bytes,
+          packagedHundredNodeFormat: installedWideRender.data.format,
+          packagedHundredNodeBytes: installedWideRender.data.bytes,
           packagedViewerHealth: 200,
           packagedViewerMutation: 405,
         },

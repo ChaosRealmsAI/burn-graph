@@ -50,6 +50,10 @@ export function initializeProject(rootInput: string, now: string): ProjectConfig
     recursive: true,
     mode: 0o700,
   });
+  mkdirSync(path.join(stateRoot, "runtime", "renders"), {
+    recursive: true,
+    mode: 0o700,
+  });
   safeChmod(stateRoot, 0o700);
   const baseName = path.basename(root).replace(/[^A-Za-z0-9._:-]/g, "-");
   const projectId = /^[A-Za-z]/.test(baseName) ? baseName : `project-${baseName}`;

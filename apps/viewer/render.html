@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>burn-graph renderer</title>
+    <style>
+      :root,
+      body,
+      #render-root {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #0d111a;
+      }
+
+      svg {
+        display: block;
+        max-width: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="render-root"></div>
+    <script type="module" src="/src/render.ts"></script>
+  </body>
+</html>

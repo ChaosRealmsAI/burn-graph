@@ -1,10 +1,12 @@
 {
   "name": "@burn-graph/design-system",
-  "version": "0.1.0-dev.3",
+  "version": "0.1.0-dev.4",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./mermaid-browser": "./src/mermaid-browser.ts",
+    "./mermaid-config": "./src/mermaid-config.ts",
     "./styles.css": "./src/styles.css"
   }
 }
