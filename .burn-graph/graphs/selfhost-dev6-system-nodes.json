@@ -1,0 +1,297 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-dev6-system-nodes",
+  "title": "Deliver dev.6 System Nodes",
+  "goal": "Ship Machine Gate and Durable Wait as one bounded, recoverable System Node layer while dogfooding real parent-child Runs.",
+  "revision": 1,
+  "maxActive": 1,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start dev.6",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "system-driver-contract"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "parent"
+      ]
+    },
+    {
+      "id": "system-driver-contract",
+      "type": "task",
+      "title": "Lock the shared System Node Driver",
+      "prompt": {
+        "objective": "Define the bounded System Node Driver contract, transaction/execution split, shared persistence, resource ownership, and public continuation envelope before Gate and Wait implementation diverge.",
+        "instructions": [
+          "Map every mutating entry point that must invoke the Driver.",
+          "Keep one committed transition per loop and execute at most one Gate outside SQLite.",
+          "Extract cohesive modules; do not extend the Core service as an unbounded monolith.",
+          "Add shared red tests before implementation."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/milestones/M06-system-nodes.md",
+          "../privacy/bdd/S05-hierarchical-runtime.feature",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "../privacy/slices/S10-machine-gate/versions/0.1.0-dev.6/plan.md",
+          "../privacy/slices/S11-durable-wait/versions/0.1.0-dev.6/plan.md",
+          "packages/core/src/service.ts",
+          "packages/core/src/storage.ts",
+          "apps/cli/src/index.ts"
+        ],
+        "doneWhen": [
+          "Driver inputs, outputs, stop conditions, idempotency, and error ownership are explicit.",
+          "Check, execution, Signal, and resource persistence has one migration plan.",
+          "Known-red shared tests cover bounded convergence, pause/cancel, and read-only exclusion.",
+          "S10 and S11 receive non-overlapping primary module ownership."
+        ],
+        "outputSchema": null,
+        "role": "dev.6 shared contract owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S05-hierarchical-runtime.feature",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "packages/system-driver",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/storage.ts",
+          "packages/core/src/service.ts",
+          "tests/system-driver",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not run a child process inside SQLite.",
+          "Do not let read-only commands invoke the Driver.",
+          "Do not create a second runtime database or duplicate public contract."
+        ],
+        "runtime": [
+          "bun run check",
+          "bun test tests/system-driver"
+        ]
+      },
+      "next": [
+        {
+          "to": "vertical-slices"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "contract"
+      ],
+      "resources": []
+    },
+    {
+      "id": "vertical-slices",
+      "type": "subgraph",
+      "title": "Run Gate and Wait slices",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "integrated-verification",
+          "route": "success",
+          "label": "Both slices complete"
+        },
+        {
+          "to": "integrated-verification",
+          "route": "failure",
+          "label": "Review failed child"
+        },
+        {
+          "to": "integrated-verification",
+          "route": "cancelled",
+          "label": "Review cancelled child"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "hierarchy"
+      ],
+      "mode": "static",
+      "children": [
+        {
+          "graphId": "selfhost-dev6-gate",
+          "revision": 1,
+          "runId": "selfhost-dev6-gate-r1",
+          "label": "S10 Machine Gate"
+        },
+        {
+          "graphId": "selfhost-dev6-wait",
+          "revision": 1,
+          "runId": "selfhost-dev6-wait-r1",
+          "label": "S11 Durable Wait"
+        }
+      ],
+      "resources": []
+    },
+    {
+      "id": "integrated-verification",
+      "type": "task",
+      "title": "Verify System Nodes together",
+      "prompt": {
+        "objective": "Run UP07, UP08, BDD S06, hierarchy regression, isolated-package replay, performance, privacy, and exact-process safety as one integrated dev.6 candidate.",
+        "instructions": [
+          "Seed bad Check, timeout, sentinel, stale execution, conflicting Signal, overdue read-only, pause, and cancellation controls.",
+          "Verify normal AI-loop responses stay bounded.",
+          "Capture reproducible Evidence from the isolated package."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M06-system-nodes.md",
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "../privacy/bdd/S05-hierarchical-runtime.feature",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "AGENTS.md",
+          "tests",
+          "scripts/verify"
+        ],
+        "doneWhen": [
+          "All source and isolated-package Gate and Wait paths pass.",
+          "Hierarchy regression, process ownership, resource release, output bounds, package size, and performance pass.",
+          "Known-bad controls turn the correct Gate red.",
+          "Evidence contains no private runtime content."
+        ],
+        "outputSchema": null,
+        "role": "dev.6 integration verifier",
+        "lockedContracts": [
+          "../privacy/milestones/M06-system-nodes.md"
+        ],
+        "writablePaths": [
+          "tests/e2e",
+          "scripts/verify",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not hide a slice failure behind the parent aggregate.",
+          "Do not weaken existing hierarchy or render Gates."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "dev6-gate"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "integration"
+      ],
+      "resources": []
+    },
+    {
+      "id": "dev6-gate",
+      "type": "decision",
+      "title": "Accept or repair dev.6",
+      "prompt": {
+        "objective": "Route pass only when both child Runs and the integrated candidate satisfy M06 with independent safety and quality review.",
+        "instructions": [
+          "Choose repair for any product, persistence, injection, process-owner, stale-result, duplicate-work, resource, timeout, privacy, package, or regression blocker.",
+          "Cite child Run outcomes, exact commands, counts, and artifact hashes."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M06-system-nodes.md",
+          "../privacy/project.json",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "S10 and S11 child Runs completed through pass routes.",
+          "Full verification and isolated-package Evidence pass.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "dev.6 release decision",
+        "lockedContracts": [
+          "../privacy/milestones/M06-system-nodes.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass from focused tests alone."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "dev.6 verified"
+        },
+        {
+          "to": "integrated-verification",
+          "route": "repair",
+          "label": "Repair integrated candidate",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "dev.6 ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "parent"
+      ]
+    }
+  ]
+}

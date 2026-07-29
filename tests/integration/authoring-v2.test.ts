@@ -229,10 +229,23 @@ describe("GraphSpec v2 authoring", () => {
     }
   });
 
-  test("accepts future System Node contracts but fails before starting them", () => {
+  test("starts hierarchical System Nodes only after their Check is registered", () => {
     const root = createTestProject();
     const service = new BurnGraphService(root);
     try {
+      service.applyCheck({
+        schemaVersion: 1,
+        id: "registered-check",
+        revision: 1,
+        title: "Registered Check",
+        argv: ["bun", "--version"],
+        cwd: ".",
+        successExitCodes: [0],
+        timeoutMs: 5_000,
+        maxOutputBytes: 4_096,
+        inheritEnv: ["PATH"],
+        resources: [],
+      });
       service.applyGraph(gateGraph("future-gate"));
       service.applyGraph(
         staticGraph("future-gate-parent", [
@@ -244,15 +257,20 @@ describe("GraphSpec v2 authoring", () => {
         ]),
       );
 
-      expectGraphError(
-        () => service.startRun("future-gate-parent", "future-gate-root"),
-        "SYSTEM_NODE_UNAVAILABLE",
+      const started = service.startRun(
+        "future-gate-parent",
+        "future-gate-root",
       );
+      expect(started.value.summary.status).toBe("running");
+      expect(service.advanceSystemNodes("future-gate-root").value).toMatchObject({
+        runId: "future-gate-child",
+        nodeId: "gate",
+      });
       expect(
         service.database.db
           .query("SELECT COUNT(*) AS count FROM runs")
           .get(),
-      ).toEqual({ count: 0 });
+      ).toEqual({ count: 2 });
     } finally {
       service.close();
       removeTestProject(root);

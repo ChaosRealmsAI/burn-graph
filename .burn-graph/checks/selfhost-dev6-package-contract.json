@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-dev6-package-contract",
+  "revision": 1,
+  "title": "dev.6 source and isolated-package UP07/UP08",
+  "argv": [
+    "bun",
+    "test",
+    "tests/e2e/system-nodes-workflow.test.ts",
+    "tests/e2e/install-workflow.test.ts"
+  ],
+  "cwd": ".",
+  "successExitCodes": [
+    0
+  ],
+  "timeoutMs": 60000,
+  "maxOutputBytes": 65536,
+  "inheritEnv": [
+    "PATH"
+  ],
+  "resources": [
+    "dev6-package-contract"
+  ]
+}

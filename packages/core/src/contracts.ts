@@ -127,6 +127,127 @@ const ResourceNamesSchema = z.array(IdentifierSchema).max(32).superRefine(
   },
 );
 
+const ProjectRelativePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1_024)
+  .superRefine((value, context) => {
+    const segments = value.split(/[\\/]/);
+    if (
+      value.includes("\0") ||
+      value.startsWith("/") ||
+      value.startsWith("\\") ||
+      /^[A-Za-z]:[\\/]/.test(value) ||
+      segments.includes("..")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "must be a confined project-relative path",
+      });
+    }
+  });
+
+const CheckArgumentSchema = z
+  .string()
+  .max(4_096)
+  .refine((value) => !value.includes("\0") && !value.includes("\n"), {
+    message: "Check argv entries cannot contain NUL or newlines",
+  });
+
+const SafeInheritedEnvironmentSchema = z.enum([
+  "PATH",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "CI",
+  "NO_COLOR",
+  "FORCE_COLOR",
+]);
+
+export const CheckSpecSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    id: IdentifierSchema,
+    revision: z.number().int().positive(),
+    title: z.string().trim().min(1).max(160),
+    argv: z.array(CheckArgumentSchema).min(1).max(64),
+    cwd: ProjectRelativePathSchema,
+    successExitCodes: z.array(z.number().int().min(0).max(255)).min(1).max(32),
+    timeoutMs: z.number().int().min(10).max(900_000),
+    maxOutputBytes: z.number().int().min(1).max(1_048_576),
+    inheritEnv: z.array(SafeInheritedEnvironmentSchema).max(7),
+    resources: ResourceNamesSchema.default([]),
+  })
+  .strict()
+  .superRefine((check, context) => {
+    if (new Set(check.successExitCodes).size !== check.successExitCodes.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["successExitCodes"],
+        message: "Success exit codes must be unique",
+      });
+    }
+    if (new Set(check.inheritEnv).size !== check.inheritEnv.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["inheritEnv"],
+        message: "Inherited environment names must be unique",
+      });
+    }
+    const executable = check.argv[0]!.replaceAll("\\", "/");
+    const base = executable.split("/").at(-1)?.toLowerCase();
+    if (
+      executable.startsWith("/") ||
+      /^[A-Za-z]:\//.test(executable) ||
+      executable.split("/").includes("..") ||
+      ["sh", "bash", "zsh", "fish", "dash", "cmd", "cmd.exe", "powershell", "pwsh"].includes(
+        base ?? "",
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["argv", 0],
+        message: "Check executable must be a non-shell confined argv entry",
+      });
+    }
+  });
+export type CheckSpec = z.infer<typeof CheckSpecSchema>;
+
+export const GateExecutionClassificationSchema = z.enum([
+  "success",
+  "non_success",
+  "timeout",
+  "output_limit",
+  "spawn_error",
+]);
+export type GateExecutionClassification = z.infer<
+  typeof GateExecutionClassificationSchema
+>;
+
+export const GateExecutionResultSchema = z
+  .object({
+    classification: GateExecutionClassificationSchema,
+    exitCode: z.number().int().nullable(),
+    durationMs: z.number().int().nonnegative().max(3_600_000),
+    byteCount: z.number().int().nonnegative().max(1_048_576),
+    digest: z.string().regex(/^[a-f0-9]{64}$/),
+    stdout: z.string().max(1_048_576),
+    stderr: z.string().max(1_048_576),
+  })
+  .strict();
+export type GateExecutionResult = z.infer<typeof GateExecutionResultSchema>;
+
+export const SignalResolutionInputSchema = z
+  .object({
+    summary: z.string().trim().min(1).max(20_000),
+    evidence: z.array(ProjectRelativePathSchema).max(64).default([]),
+  })
+  .strict();
+export type SignalResolutionInput = z.infer<
+  typeof SignalResolutionInputSchema
+>;
+
 export const NodeSpecSchema = z
   .object({
     id: IdentifierSchema,
@@ -597,6 +718,82 @@ export interface ActorWork {
 export interface RuntimeChange {
   readonly revision: number;
   readonly event: GraphEvent;
+}
+
+export interface GateExecutionClaim {
+  readonly executionId: string;
+  readonly runId: string;
+  readonly rootRunId: string;
+  readonly nodeId: string;
+  readonly attempt: number;
+  readonly check: CheckSpec;
+  readonly leaseExpiresAt: string;
+}
+
+export interface CheckExecutionSummary {
+  readonly executionId: string;
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly attempt: number;
+  readonly check: {
+    readonly id: string;
+    readonly revision: number;
+  };
+  readonly status:
+    | "claimed"
+    | "completed"
+    | "blocked"
+    | "stale"
+    | "expired";
+  readonly leaseExpiresAt: string;
+  readonly classification: GateExecutionClassification | null;
+  readonly exitCode: number | null;
+  readonly durationMs: number | null;
+  readonly byteCount: number | null;
+  readonly digest: string | null;
+  readonly createdAt: string;
+  readonly finishedAt: string | null;
+}
+
+export interface CheckExecutionInspection extends CheckExecutionSummary {
+  readonly output: {
+    readonly stdout: string;
+    readonly stderr: string;
+    readonly retainedBytes: number;
+    readonly truncated: boolean;
+  };
+}
+
+export interface WaitSignalSummary {
+  readonly signalId: string;
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly status: "waiting" | "resolved" | "timed_out" | "stale";
+  readonly routes: readonly string[];
+  readonly timeoutRoute: string | null;
+  readonly deadlineAt: string | null;
+  readonly overdue: boolean;
+  readonly resolvedRoute: string | null;
+  readonly summary: string | null;
+  readonly evidence: readonly string[];
+  readonly createdAt: string;
+  readonly resolvedAt: string | null;
+}
+
+export interface ResourceLockSummary {
+  readonly resource: string;
+  readonly ownerKind: "gate";
+  readonly ownerId: string;
+  readonly rootRunId: string;
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly expiresAt: string;
+  readonly createdAt: string;
+}
+
+export interface SystemNodeMutation<T> {
+  readonly value: T;
+  readonly changes: readonly RuntimeChange[];
 }
 
 export interface ReadyWork {

@@ -103,11 +103,13 @@ describe("converged public CLI", () => {
     const rootHelp = await ok(root, ["--help"]);
     expect(rootHelp.command).toBe("help");
     expect(rootHelp.data.groups.execute).toEqual([
+      "check",
       "run",
       "next",
       "current",
       "focus",
       "done",
+      "signal",
     ]);
     expect(
       rootHelp.data.commands.map((command: any) => command.name),
@@ -134,6 +136,9 @@ describe("converged public CLI", () => {
       "tree",
       "node",
       "ready",
+      "waits",
+      "resources",
+      "executions",
       "mermaid",
       "events",
     ]);
@@ -158,7 +163,7 @@ describe("converged public CLI", () => {
       "burn-graph done --help",
     );
     const version = await ok(root, ["--version"]);
-    expect(version.data.version).toBe("0.1.0-dev.5");
+    expect(version.data.version).toBe("0.1.0-dev.6");
 
     for (const removed of [
       ["work", "--help"],

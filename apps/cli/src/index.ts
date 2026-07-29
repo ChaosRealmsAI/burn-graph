@@ -8,6 +8,7 @@ import {
   BurnGraphService,
   discoverProjectRoot,
   initializeProject,
+  validateCheckSpec,
   validateGraphSpec,
   type GraphStatus,
   type NodeStatus,
@@ -20,6 +21,7 @@ import {
   type RenderFormat,
   type RenderScope,
 } from "@burn-graph/render";
+import { SystemNodeDriver } from "@burn-graph/system-driver";
 import { Command, Option } from "commander";
 import { ZodError } from "zod";
 
@@ -30,7 +32,7 @@ import {
   viewerInstanceStatus,
 } from "./viewer-runtime.ts";
 
-const VERSION = "0.1.0-dev.5";
+const VERSION = "0.1.0-dev.6";
 const GRAPH_STATUSES: readonly GraphStatus[] = [
   "draft",
   "running",
@@ -154,6 +156,17 @@ function withService<T>(operation: (service: BurnGraphService) => T): T {
   const service = new BurnGraphService(globalOptions().root ?? process.cwd());
   try {
     return operation(service);
+  } finally {
+    service.close();
+  }
+}
+
+async function withServiceAsync<T>(
+  operation: (service: BurnGraphService) => Promise<T>,
+): Promise<T> {
+  const service = new BurnGraphService(globalOptions().root ?? process.cwd());
+  try {
+    return await operation(service);
   } finally {
     service.close();
   }
@@ -394,6 +407,69 @@ graph
     });
   });
 
+const check = group("check", "author immutable registered machine Checks");
+
+check
+  .command("validate")
+  .description("validate a CheckSpec without writing it")
+  .requiredOption("--input <file>", "JSON file or - for stdin")
+  .action(async (options: { input: string }) => {
+    success(
+      "check.validate",
+      validateCheckSpec(await readJsonInput(options.input)),
+      {
+        nextActions: [{
+          id: "apply-check",
+          command: `burn-graph check apply --input ${options.input}`,
+          description: "Register the validated immutable Check revision.",
+        }],
+      },
+    );
+  });
+
+check
+  .command("apply")
+  .description("validate and register a new immutable Check revision")
+  .requiredOption("--input <file>", "JSON file or - for stdin")
+  .action(async (options: { input: string }) => {
+    const input = await readJsonInput(options.input);
+    const spec = withService((service) =>
+      service.applyCheck(input),
+    );
+    success("check.apply", spec, {
+      nextActions: [{
+        id: "apply-graph",
+        command: "burn-graph graph apply --input graph.json",
+        description: "Register a Graph that pins this Check revision.",
+      }],
+    });
+  });
+
+check
+  .command("list")
+  .description("list latest registered Check revisions")
+  .action(() => {
+    success("check.list", withService((service) => service.listChecks()));
+  });
+
+check
+  .command("show")
+  .description("show one normalized Check revision")
+  .argument("<check>", "Check ID")
+  .option(
+    "--revision <number>",
+    "exact immutable revision",
+    boundedInteger(2_147_483_647),
+  )
+  .action((checkId: string, options: { revision?: number }) => {
+    success(
+      "check.show",
+      withService((service) =>
+        service.getCheck(checkId, options.revision),
+      ),
+    );
+  });
+
 const run = group("run", "control Graph Run lifecycle");
 
 run
@@ -403,12 +479,16 @@ run
   .requiredOption("--actor <id>", "stable Actor ID")
   .option("--run-id <id>", "stable explicit Run ID")
   .action(
-    (
+    async (
       graphId: string,
       options: { actor: string; runId?: string },
     ) => {
-      const result = withService((service) =>
-        service.startWithAssignments(graphId, options.actor, options.runId),
+      const result = await withServiceAsync((service) =>
+        new SystemNodeDriver(service).start(
+          graphId,
+          options.actor,
+          options.runId,
+        ),
       );
       scheduleSuccess("run.start", result);
     },
@@ -443,15 +523,15 @@ run
   .requiredOption("--actor <id>", "stable Actor ID")
   .requiredOption("--idempotency-key <key>", "stable retry key")
   .action(
-    (
+    async (
       reference: string,
       options: { actor: string; idempotencyKey: string },
     ) => {
-    const result = withService((service) =>
-      service.resumeWithAssignments(
-        reference,
-        options.actor,
-        options.idempotencyKey,
+    const result = await withServiceAsync((service) =>
+      new SystemNodeDriver(service).resume(
+          reference,
+          options.actor,
+          options.idempotencyKey,
       ),
     );
     scheduleSuccess("run.resume", result);
@@ -484,10 +564,13 @@ program
   .command("next")
   .description("resume and automatically fill one Actor's Assignment slots")
   .requiredOption("--actor <id>", "stable Actor ID")
-  .action((options: { actor: string }) => {
+  .option("--graph <run-or-graph>", "prefer and converge one Run tree")
+  .action(async (options: { actor: string; graph?: string }) => {
     scheduleSuccess(
       "next",
-      withService((service) => service.schedule(options.actor)),
+      await withServiceAsync((service) =>
+        new SystemNodeDriver(service).next(options.actor, options.graph),
+      ),
     );
   });
 
@@ -631,11 +714,61 @@ program
   .requiredOption("--input <file>", "completion JSON file or - for stdin")
   .action(async (options: { assignment: string; input: string }) => {
     const input = await readJsonInput(options.input);
-    const result = withService((service) =>
-      service.completeAndContinue(options.assignment, input),
+    const result = await withServiceAsync((service) =>
+      new SystemNodeDriver(service).completeAndContinue(
+        options.assignment,
+        input,
+      ),
     );
     scheduleSuccess("done", result);
   });
+
+const signal = group("signal", "resolve durable external Wait outcomes");
+
+signal
+  .command("resolve")
+  .description("settle one opaque Signal route and converge successors")
+  .requiredOption("--signal <id>", "opaque Signal ID")
+  .requiredOption("--route <route>", "one declared Signal route")
+  .requiredOption("--input <file>", "resolution JSON file or - for stdin")
+  .requiredOption("--idempotency-key <key>", "stable retry key")
+  .option("--actor <id>", "Actor that may receive successor Assignments")
+  .action(
+    async (options: {
+      signal: string;
+      route: string;
+      input: string;
+      idempotencyKey: string;
+      actor?: string;
+    }) => {
+      const input = await readJsonInput(options.input);
+      const result = await withServiceAsync((service) =>
+        new SystemNodeDriver(service).resolveSignal(
+          options.signal,
+          options.route,
+          input as {
+            summary: string;
+            evidence: string[];
+          },
+          options.idempotencyKey,
+          options.actor,
+        ),
+      );
+      if ("assignments" in result) {
+        scheduleSuccess("signal.resolve", result);
+        return;
+      }
+      const { changes, ...data } = result;
+      success("signal.resolve", data, {
+        changes,
+        nextActions: [{
+          id: "next",
+          command: "burn-graph next --actor primary",
+          description: "Claim any AI successor through the normal scheduler.",
+        }],
+      });
+    },
+  );
 
 const inspect = group("inspect", "read bounded runtime and graph projections");
 
@@ -827,6 +960,68 @@ inspect
   });
 
 inspect
+  .command("waits")
+  .description("list bounded durable Signal state without advancing deadlines")
+  .argument("[run-or-graph]")
+  .option("--limit <count>", "maximum rows", boundedInteger(1_000), 100)
+  .action((reference: string | undefined, options: { limit: number }) => {
+    success(
+      "inspect.waits",
+      withService((service) =>
+        service.listWaitSignals(reference).slice(0, options.limit),
+      ),
+    );
+  });
+
+inspect
+  .command("resources")
+  .description("list current exclusive System Node resource ownership")
+  .argument("[run-or-graph]")
+  .option("--limit <count>", "maximum rows", boundedInteger(1_000), 100)
+  .action((reference: string | undefined, options: { limit: number }) => {
+    success(
+      "inspect.resources",
+      withService((service) =>
+        service.listResourceLocks(reference).slice(0, options.limit),
+      ),
+    );
+  });
+
+inspect
+  .command("executions")
+  .description("list bounded Gate execution evidence without raw public events")
+  .argument("[run-or-graph]")
+  .option("--limit <count>", "maximum rows", boundedInteger(100), 100)
+  .option("--include-output", "include bounded local stdout/stderr")
+  .option(
+    "--output-bytes <count>",
+    "combined stdout/stderr bytes retained per row",
+    boundedInteger(16_384),
+    4_096,
+  )
+  .action((
+    reference: string | undefined,
+    options: {
+      limit: number;
+      includeOutput?: boolean;
+      outputBytes: number;
+    },
+  ) => {
+    success(
+      "inspect.executions",
+      withService((service) =>
+        options.includeOutput
+          ? service.inspectCheckExecutions(
+              reference,
+              options.limit,
+              options.outputBytes,
+            )
+          : service.listCheckExecutions(reference).slice(0, options.limit),
+      ),
+    );
+  });
+
+inspect
   .command("mermaid")
   .description("return one Run or Run tree Mermaid projection inside JSON")
   .argument("<run-or-graph>")
@@ -967,12 +1162,20 @@ recover
   .description("block one Assignment and continue other work")
   .requiredOption("--assignment <id>", "Assignment ID")
   .requiredOption("--reason <text>", "actionable blocking reason")
-  .action((options: { assignment: string; reason: string }) => {
+  .action(async (options: { assignment: string; reason: string }) => {
+    const result = await withServiceAsync(async (service) => {
+      const initial = service.blockAssignment(
+        options.assignment,
+        options.reason,
+      );
+      return new SystemNodeDriver(service).continueSchedule(
+        initial,
+        initial.runs[0]?.runId,
+      );
+    });
     scheduleSuccess(
       "recover.block",
-      withService((service) =>
-        service.blockAssignment(options.assignment, options.reason),
-      ),
+      result,
     );
   });
 
@@ -980,12 +1183,17 @@ recover
   .command("unblock")
   .description("return one blocked Assignment node to Ready")
   .requiredOption("--assignment <id>", "prior blocked Assignment ID")
-  .action((options: { assignment: string }) => {
+  .action(async (options: { assignment: string }) => {
+    const result = await withServiceAsync(async (service) => {
+      const initial = service.unblockAssignment(options.assignment);
+      return new SystemNodeDriver(service).continueSchedule(
+        initial,
+        initial.runs[0]?.runId,
+      );
+    });
     scheduleSuccess(
       "recover.unblock",
-      withService((service) =>
-        service.unblockAssignment(options.assignment),
-      ),
+      result,
     );
   });
 
@@ -994,12 +1202,20 @@ recover
   .description("release one Assignment and continue other work")
   .requiredOption("--assignment <id>", "Assignment ID")
   .requiredOption("--reason <text>", "release reason")
-  .action((options: { assignment: string; reason: string }) => {
+  .action(async (options: { assignment: string; reason: string }) => {
+    const result = await withServiceAsync(async (service) => {
+      const initial = service.releaseAssignment(
+        options.assignment,
+        options.reason,
+      );
+      return new SystemNodeDriver(service).continueSchedule(
+        initial,
+        initial.runs[0]?.runId,
+      );
+    });
     scheduleSuccess(
       "recover.release",
-      withService((service) =>
-        service.releaseAssignment(options.assignment, options.reason),
-      ),
+      result,
     );
   });
 
@@ -1010,52 +1226,94 @@ recover
   .requiredOption("--reason <text>", "failure reason")
   .option("--retry", "retry when maxAttempts allows")
   .action(
-    (options: { assignment: string; reason: string; retry?: boolean }) => {
+    async (options: { assignment: string; reason: string; retry?: boolean }) => {
+      const result = await withServiceAsync(async (service) => {
+        const initial = service.failAssignment(
+          options.assignment,
+          options.reason,
+          options.retry ?? false,
+        );
+        return new SystemNodeDriver(service).continueSchedule(
+          initial,
+          initial.runs[0]?.runId,
+        );
+      });
       scheduleSuccess(
         "recover.fail",
-        withService((service) =>
-          service.failAssignment(
-            options.assignment,
-            options.reason,
-            options.retry ?? false,
-          ),
-        ),
+        result,
       );
     },
   );
 
 recover
   .command("reconcile")
-  .description("reopen expired Assignments across all or one selected Run")
+  .description("reconcile expired Assignments, Gates, and due Waits")
   .argument("[run-or-graph]")
-  .action((reference?: string) => {
-    const results = withService((service) =>
-      service.reconcileExpired(reference),
-    );
-    const changes = results.flatMap(
-      (result) =>
-        result.changes ?? [
-          {
-            revision: result.revision,
-            event: result.event,
+  .option("--actor <id>", "Actor that may receive work after reconciliation")
+  .action(
+    async (reference: string | undefined, options: { actor?: string }) => {
+      const result = await withServiceAsync(async (service) => {
+        const assignments = service.reconcileExpired(reference);
+        const system = await new SystemNodeDriver(service).reconcile(reference);
+        const assignmentChanges = assignments.flatMap(
+          (entry) =>
+            entry.changes ?? [{
+              revision: entry.revision,
+              event: entry.event,
+            }],
+        );
+        const changes = [...assignmentChanges, ...system.changes];
+        if (options.actor) {
+          const schedule = service.schedule(options.actor, reference);
+          return {
+            kind: "schedule" as const,
+            value: {
+              ...schedule,
+              reconciledAssignments: assignments.reduce(
+                (count, entry) => count + entry.value.length,
+                0,
+              ),
+              reconciled: assignments.reduce(
+                (count, entry) => count + entry.value.length,
+                0,
+              ),
+              system: {
+                transitions: system.transitions,
+                gateExecutions: system.gateExecutions,
+                boundReached: system.boundReached,
+              },
+              changes: [...changes, ...schedule.changes],
+            },
+          };
+        }
+        return {
+          kind: "receipt" as const,
+          value: {
+            reconciledAssignments: assignments.reduce(
+              (count, entry) => count + entry.value.length,
+              0,
+            ),
+            reconciled: assignments.reduce(
+              (count, entry) => count + entry.value.length,
+              0,
+            ),
+            system: {
+              transitions: system.transitions,
+              gateExecutions: system.gateExecutions,
+              boundReached: system.boundReached,
+            },
+            changes,
           },
-        ],
-    );
-    success(
-      "recover.reconcile",
-      {
-        reconciled: results.reduce(
-          (count, result) => count + result.value.length,
-          0,
-        ),
-        runs: results.map((result) => ({
-          revision: result.revision,
-          nodes: result.value,
-        })),
-      },
-      { changes },
-    );
-  });
+        };
+      });
+      if (result.kind === "schedule") {
+        scheduleSuccess("recover.reconcile", result.value);
+        return;
+      }
+      const { changes, ...data } = result.value;
+      success("recover.reconcile", data, { changes });
+    },
+  );
 
 const viewer = group("viewer", "manage named read-only local Viewer instances");
 
@@ -1160,6 +1418,15 @@ program
             ).length,
         0,
       );
+      const waits = service.listWaitSignals();
+      const executions = service.listCheckExecutions();
+      const overdueWaits = waits.filter((signal) => signal.overdue).length;
+      const expiredExecutions = executions.filter(
+        (execution) =>
+          ["claimed", "stale"].includes(execution.status) &&
+          new Date(execution.leaseExpiresAt).getTime() <= Date.now(),
+      ).length;
+      const resourceLocks = service.listResourceLocks().length;
       return {
         projectId: snapshot.projectId,
         root: service.root,
@@ -1167,7 +1434,10 @@ program
         graphCount: snapshot.graphs.length,
         runCount: snapshot.runs.length,
         staleClaims,
-        healthy: staleClaims === 0,
+        overdueWaits,
+        expiredExecutions,
+        resourceLocks,
+        healthy: staleClaims === 0 && expiredExecutions === 0,
         capabilities: {
           render: inspectRenderCapability(),
         },
@@ -1200,13 +1470,18 @@ const helpDetails = new Map<string, HelpDetail>([
   ["graph.list", { mutates: false }],
   ["graph.show", { mutates: false }],
   ["graph.clone", { mutates: true, next: ["run.start"] }],
+  ["check", { mutates: false }],
+  ["check.validate", { mutates: false, input: "CheckSpec JSON" }],
+  ["check.apply", { mutates: true, input: "CheckSpec JSON", next: ["graph.apply"] }],
+  ["check.list", { mutates: false }],
+  ["check.show", { mutates: false }],
   ["run", { mutates: false }],
   [
     "run.start",
     {
       mutates: true,
       output: "WorkSchedule with AssignmentPacket[]",
-      errors: ["SYSTEM_NODE_UNAVAILABLE"],
+      errors: ["CHECK_NOT_FOUND", "CHECK_EXECUTION_STALE"],
     },
   ],
   [
@@ -1275,12 +1550,31 @@ const helpDetails = new Map<string, HelpDetail>([
       ],
     },
   ],
+  ["signal", { mutates: false }],
+  [
+    "signal.resolve",
+    {
+      mutates: true,
+      input: {
+        summary: "non-empty bounded string",
+        evidence: "project-relative string[]",
+      },
+      errors: [
+        "SIGNAL_NOT_FOUND",
+        "SIGNAL_INPUT_CONFLICT",
+        "INVALID_SIGNAL_ROUTE",
+      ],
+    },
+  ],
   ["inspect", { mutates: false }],
   ["inspect.overview", { mutates: false }],
   ["inspect.run", { mutates: false }],
   ["inspect.tree", { mutates: false, output: "bounded GraphTreeSnapshot" }],
   ["inspect.node", { mutates: false }],
   ["inspect.ready", { mutates: false, next: ["next"] }],
+  ["inspect.waits", { mutates: false }],
+  ["inspect.resources", { mutates: false }],
+  ["inspect.executions", { mutates: false }],
   ["inspect.mermaid", { mutates: false, output: "{ source: Mermaid string }" }],
   ["inspect.events", { mutates: false, output: "JSON envelope or JSONL stream" }],
   ["recover", { mutates: false }],
@@ -1320,6 +1614,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     ],
     invariants: [
       "The Runtime chooses Ready nodes and legal Next transitions.",
+      "Mutating loop commands automatically settle Gate and Wait System Nodes.",
       "Every Assignment contains prompt, context, lease, routes, and return commands.",
       "One Actor holds at most eight live Assignments across all Graphs.",
     ],
@@ -1345,10 +1640,8 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     ],
     commands: ["graph validate", "graph apply", "graph show"],
     executionAvailability: {
-      "0.1.0-dev.5":
-        "Subgraph executes; Gate and Wait authoring is contract-only.",
-      next:
-        "Gate and Wait execute through the System Node Driver in 0.1.0-dev.6.",
+      "0.1.0-dev.6":
+        "Subgraph, registered Gate, and durable Wait execute through the bounded System Node Driver.",
     },
   },
   lifecycle: {
@@ -1372,6 +1665,9 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "inspect tree",
       "inspect node",
       "inspect ready",
+      "inspect waits",
+      "inspect resources",
+      "inspect executions",
       "inspect mermaid",
       "inspect events",
     ],
@@ -1540,7 +1836,7 @@ function helpPayload(
           ],
           groups: {
             author: ["init", "graph"],
-            execute: ["run", "next", "current", "focus", "done"],
+            execute: ["check", "run", "next", "current", "focus", "done", "signal"],
             observe: ["inspect", "render", "viewer"],
             recover: ["recover", "doctor"],
             learn: Object.keys(helpTopics).map(
@@ -1638,6 +1934,31 @@ function recoveryActions(error: BurnGraphError): readonly NextAction[] {
         description: "Initialize this project before other commands.",
       },
     ];
+  }
+  if (error.code === "CHECK_NOT_FOUND" || error.code === "INVALID_CHECK") {
+    return [{
+      id: "check-help",
+      command: "burn-graph check --help",
+      description: "Validate and register the exact Check revision first.",
+    }];
+  }
+  if (
+    error.code === "SIGNAL_NOT_FOUND" ||
+    error.code === "SIGNAL_STALE" ||
+    error.code === "SIGNAL_INPUT_CONFLICT"
+  ) {
+    return [{
+      id: "inspect-waits",
+      command: "burn-graph inspect waits",
+      description: "Recover authoritative opaque Signal state.",
+    }];
+  }
+  if (error.code === "CHECK_EXECUTION_STALE") {
+    return [{
+      id: "reconcile",
+      command: "burn-graph recover reconcile",
+      description: "Reconcile the current Gate execution identity safely.",
+    }];
   }
   if (
     error.code === "RENDERER_UNAVAILABLE" ||

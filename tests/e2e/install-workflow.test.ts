@@ -16,6 +16,10 @@ import {
   removeTestProject,
   wideGraph,
 } from "../helpers/fixtures.ts";
+import {
+  durableWaitGraph,
+  gateRepairGraph,
+} from "../helpers/system-node-fixtures.ts";
 
 interface CommandResult {
   readonly exitCode: number;
@@ -28,7 +32,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.5.tgz",
+  "burn-graph-0.1.0-dev.6.tgz",
 );
 const roots: string[] = [];
 
@@ -89,6 +93,14 @@ function directoryBytes(root: string): number {
     }
   }
   return bytes;
+}
+
+function assignment(envelope: any, nodeId: string): any {
+  const found = envelope.data.assignments.find(
+    (candidate: any) => candidate.node.id === nodeId,
+  );
+  if (!found) throw new Error(`Missing Assignment ${nodeId}`);
+  return found;
 }
 
 afterEach(() => {
@@ -199,7 +211,7 @@ describe("lightweight Bun package", () => {
       schemaVersion: 1,
       ok: true,
       command: "version",
-      data: { version: "0.1.0-dev.5" },
+      data: { version: "0.1.0-dev.6" },
     });
 
     const installedPackage = path.join(
@@ -325,6 +337,257 @@ describe("lightweight Bun package", () => {
       "installed:smoke",
     ]);
     expect(completed.data.summary.status).toBe("completed");
+
+    writeFileSync(
+      path.join(projectRoot, "installed-check.ts"),
+      "const value = await Bun.file('status.txt').text(); console.log(value.trim()); process.exit(value.trim() === 'good' ? 0 : 9);\n",
+    );
+    writeFileSync(path.join(projectRoot, "status.txt"), "bad-private-output\n");
+    const installedCheckFile = path.join(
+      projectRoot,
+      "installed-check.json",
+    );
+    writeFileSync(
+      installedCheckFile,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "installed-check",
+        revision: 1,
+        title: "Installed Check",
+        argv: ["bun", "installed-check.ts"],
+        cwd: ".",
+        successExitCodes: [0],
+        timeoutMs: 2_000,
+        maxOutputBytes: 1_024,
+        inheritEnv: ["PATH"],
+        resources: ["installed-check"],
+      })}\n`,
+    );
+    const installedGateFile = path.join(projectRoot, "installed-gate.json");
+    writeFileSync(
+      installedGateFile,
+      `${JSON.stringify(gateRepairGraph("installed-gate", "installed-check"))}\n`,
+    );
+    await installedCli(executable, projectRoot, [
+      "check",
+      "apply",
+      "--input",
+      installedCheckFile,
+    ]);
+    await installedCli(executable, projectRoot, [
+      "graph",
+      "apply",
+      "--input",
+      installedGateFile,
+    ]);
+    const installedGate = await installedCli(executable, projectRoot, [
+      "run",
+      "start",
+      "installed-gate",
+      "--actor",
+      "installed",
+      "--run-id",
+      "installed:gate",
+    ]);
+    const firstImplementation = assignment(installedGate, "implement");
+    const rejectedGate = await installedCli(
+      executable,
+      projectRoot,
+      [
+        "done",
+        "--assignment",
+        firstImplementation.assignmentId,
+        "--input",
+        "-",
+      ],
+      JSON.stringify({
+        summary: "Installed package saw the seeded bad fixture.",
+        evidence: [],
+      }),
+    );
+    expect(rejectedGate.data.system.gateExecutions).toBe(1);
+    const review = assignment(rejectedGate, "review");
+    const repair = await installedCli(
+      executable,
+      projectRoot,
+      ["done", "--assignment", review.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "Installed machine evidence requires repair.",
+        route: "repair",
+        evidence: [],
+      }),
+    );
+    const secondImplementation = assignment(repair, "implement");
+    writeFileSync(path.join(projectRoot, "status.txt"), "good\n");
+    const acceptedGate = await installedCli(
+      executable,
+      projectRoot,
+      [
+        "done",
+        "--assignment",
+        secondImplementation.assignmentId,
+        "--input",
+        "-",
+      ],
+      JSON.stringify({
+        summary: "Installed fixture repaired.",
+        evidence: ["status.txt"],
+      }),
+    );
+    expect(acceptedGate.data).toMatchObject({
+      state: "completed",
+      system: { gateExecutions: 1 },
+      assignments: [],
+    });
+    const installedExecutions = (
+      await installedCli(executable, projectRoot, [
+        "inspect",
+        "executions",
+        "installed:gate",
+      ])
+    ).data;
+    expect(
+      installedExecutions
+        .map((execution: any) => execution.classification)
+        .sort(),
+    ).toEqual(["non_success", "success"]);
+    expect(JSON.stringify(installedExecutions)).not.toContain(
+      "bad-private-output",
+    );
+
+    const installedWaitFile = path.join(projectRoot, "installed-wait.json");
+    writeFileSync(
+      installedWaitFile,
+      `${JSON.stringify(durableWaitGraph("installed-wait"))}\n`,
+    );
+    await installedCli(executable, projectRoot, [
+      "graph",
+      "apply",
+      "--input",
+      installedWaitFile,
+    ]);
+    const installedWait = await installedCli(executable, projectRoot, [
+      "run",
+      "start",
+      "installed-wait",
+      "--actor",
+      "installed",
+      "--run-id",
+      "installed:wait",
+    ]);
+    expect(installedWait.data.waiting).toHaveLength(1);
+    const unrelated = assignment(installedWait, "unrelated");
+    const signalId = installedWait.data.waiting[0].signalId;
+    expect(
+      (
+        await installedCli(executable, projectRoot, [
+          "inspect",
+          "waits",
+          "installed:wait",
+        ])
+      ).data[0],
+    ).toMatchObject({
+      signalId,
+      status: "waiting",
+      routes: ["approved", "rejected"],
+    });
+    const resolvedWait = await installedCli(
+      executable,
+      projectRoot,
+      [
+        "signal",
+        "resolve",
+        "--signal",
+        signalId,
+        "--route",
+        "approved",
+        "--actor",
+        "installed",
+        "--idempotency-key",
+        "installed-approval-1",
+        "--input",
+        "-",
+      ],
+      JSON.stringify({
+        summary: "Installed approval accepted.",
+        evidence: ["evidence/approval.json"],
+      }),
+    );
+    const afterApproval = assignment(resolvedWait, "after");
+    expect(afterApproval.context.predecessors).toContainEqual(
+      expect.objectContaining({
+        nodeId: "wait",
+        route: "approved",
+        summary: "Installed approval accepted.",
+      }),
+    );
+    const beforeReplay = await installedCli(executable, projectRoot, [
+      "inspect",
+      "run",
+      "installed:wait",
+      "--events",
+      "100",
+    ]);
+    const replayedWait = await installedCli(
+      executable,
+      projectRoot,
+      [
+        "signal",
+        "resolve",
+        "--signal",
+        signalId,
+        "--route",
+        "approved",
+        "--actor",
+        "installed",
+        "--idempotency-key",
+        "installed-approval-1",
+        "--input",
+        "-",
+      ],
+      JSON.stringify({
+        summary: "Installed approval accepted.",
+        evidence: ["evidence/approval.json"],
+      }),
+    );
+    expect(replayedWait.data.resolved.replayed).toBe(true);
+    expect(assignment(replayedWait, "after").assignmentId).toBe(
+      afterApproval.assignmentId,
+    );
+    const afterReplay = await installedCli(executable, projectRoot, [
+      "inspect",
+      "run",
+      "installed:wait",
+      "--events",
+      "100",
+    ]);
+    expect(afterReplay.data.summary.runtimeRevision).toBe(
+      beforeReplay.data.summary.runtimeRevision,
+    );
+    expect(afterReplay.data.events).toEqual(beforeReplay.data.events);
+
+    await installedCli(
+      executable,
+      projectRoot,
+      ["done", "--assignment", unrelated.assignmentId, "--input", "-"],
+      JSON.stringify({ summary: "Installed unrelated work completed." }),
+    );
+    const completedWait = await installedCli(
+      executable,
+      projectRoot,
+      ["done", "--assignment", afterApproval.assignmentId, "--input", "-"],
+      JSON.stringify({ summary: "Installed approved work completed." }),
+    );
+    expect(completedWait.data.state).toBe("completed");
+    expect(
+      (
+        await installedCli(executable, projectRoot, [
+          "inspect",
+          "run",
+          "installed:wait",
+        ])
+      ).data.summary.status,
+    ).toBe("completed");
 
     const wideGraphFile = path.join(projectRoot, "wide-graph.json");
     writeFileSync(

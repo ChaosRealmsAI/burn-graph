@@ -345,6 +345,104 @@ export class BurnGraphDatabase {
           .run();
       }
 
+      const systemNodes = this.db
+        .query("SELECT version FROM schema_migrations WHERE version = 5")
+        .get() as { version: number } | null;
+      if (!systemNodes) {
+        this.db.exec(`
+          CREATE TABLE check_specs (
+            check_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            document_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (check_id, revision)
+          );
+
+          CREATE TABLE check_executions (
+            execution_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            check_id TEXT NOT NULL,
+            check_revision INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            lease_expires_at TEXT NOT NULL,
+            classification TEXT,
+            exit_code INTEGER,
+            duration_ms INTEGER,
+            byte_count INTEGER,
+            digest TEXT,
+            stdout_text TEXT,
+            stderr_text TEXT,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            UNIQUE (run_id, node_id, attempt),
+            FOREIGN KEY (run_id, node_id)
+              REFERENCES node_runs(run_id, node_id) ON DELETE CASCADE,
+            FOREIGN KEY (check_id, check_revision)
+              REFERENCES check_specs(check_id, revision)
+          );
+
+          CREATE INDEX check_executions_status_idx
+            ON check_executions(status, lease_expires_at, run_id);
+
+          CREATE TABLE wait_signals (
+            signal_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            routes_json TEXT NOT NULL,
+            timeout_route TEXT,
+            deadline_at TEXT,
+            resolved_route TEXT,
+            summary TEXT,
+            evidence_json TEXT,
+            idempotency_key TEXT,
+            resolution_json TEXT,
+            continuation_json TEXT,
+            created_at TEXT NOT NULL,
+            resolved_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE (run_id, node_id, attempt),
+            FOREIGN KEY (run_id, node_id)
+              REFERENCES node_runs(run_id, node_id) ON DELETE CASCADE
+          );
+
+          CREATE UNIQUE INDEX wait_signals_idempotency_idx
+            ON wait_signals(idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+
+          CREATE INDEX wait_signals_status_idx
+            ON wait_signals(status, deadline_at, run_id);
+
+          CREATE TABLE resource_locks (
+            resource TEXT PRIMARY KEY,
+            owner_kind TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            root_run_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id, node_id)
+              REFERENCES node_runs(run_id, node_id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX resource_locks_owner_idx
+            ON resource_locks(owner_kind, owner_id);
+        `);
+        this.db
+          .query(
+            `INSERT INTO schema_migrations
+             (version, name, applied_at)
+             VALUES (5, 'system-nodes',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+          )
+          .run();
+      }
+      this.ensureColumn("wait_signals", "continuation_json", "TEXT");
+
       this.db.exec("COMMIT;");
     } catch (error) {
       if (this.db.inTransaction) {

@@ -16,9 +16,9 @@ product contract.
   projection, and the local read-only Viewer.
 - burn-graph never launches a model, dispatches a subagent, executes an AI
   Task, or interprets task output. AI callers receive guarded prompt
-  Assignments and report outcomes. The only planned process-execution boundary
-  is an exact versioned Check referenced by a Gate; shell strings and arbitrary
-  Task commands remain forbidden.
+  Assignments and report outcomes. The only process-execution boundary is an
+  exact immutable Check revision referenced by a Gate; shell strings and
+  arbitrary Task commands remain forbidden.
 - Graph specifications are JSON. Runtime state is SQLite. The CLI is the only
   supported write surface.
 - This repository owns code and public technical documentation only. Product,
@@ -32,7 +32,15 @@ product contract.
 ## Architecture
 
 - `packages/core` owns all graph contracts, validation, state transitions,
-  SQLite persistence, assignment packets, events, and Mermaid generation.
+  SQLite persistence, assignment packets, System Node persistence, events, and
+  Mermaid generation. General and System Node state machines remain separate
+  modules inside this package.
+- `packages/system-driver` owns the bounded mutation loop that converges
+  structural nodes, Gate claims/results, Wait reconciliation, and Assignment
+  scheduling.
+- `packages/gate` owns exact argv execution, project-confined working
+  directories, selected environment inheritance, timeout, exact-child
+  termination, bounded output, and result classification.
 - `packages/render` owns cache identity, browser discovery, exact isolated
   headless lifecycle, artifact validation, and SVG/PNG persistence.
 - `packages/design-system` owns visual language, tokens, React components, and
@@ -55,6 +63,8 @@ product contract.
 - Full verification: `bun run verify`
 - Development CLI Help: `bun run burn-graph -- --help`
 - Development AI loop: `bun run burn-graph -- next --actor <actor>`
+- Register a Check: `bun run burn-graph -- check apply --input <check.json>`
+- Resolve a Wait: `bun run burn-graph -- signal resolve --signal <id> --route <route> --idempotency-key <key> --input <result.json>`
 - Development artifact: `bun run burn-graph -- render <run-or-graph>`
 - Product Preview: `bun run preview`
 - Start named Viewer: `bun run viewer:start -- <name> <project-root> [port]`

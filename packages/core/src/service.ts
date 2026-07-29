@@ -11,6 +11,7 @@ import {
   NodeStatusSchema,
   type ActorWork,
   type AssignmentPacket,
+  type CheckSpec,
   type CheckpointInput,
   type ChildRunDescriptor,
   type CompletionInput,
@@ -33,12 +34,24 @@ import {
   type RuntimeNode,
   type WorkSchedule,
 } from "./contracts.ts";
+import { validateCheckSpec } from "./gate.ts";
 import { renderMermaid, renderTreeMermaid } from "./mermaid.ts";
 import {
   discoverProjectRoot,
   readProjectConfig,
+  writeCheckSpec,
   writeGraphSpec,
 } from "./project.ts";
+import {
+  json,
+  numberValue,
+  optionalNumber,
+  optionalString,
+  parseJson,
+  stableJson,
+  stringValue,
+  type Row,
+} from "./sql.ts";
 import { BurnGraphDatabase } from "./storage.ts";
 import {
   loopBodyNodeIds,
@@ -47,8 +60,6 @@ import {
   type ValidatedGraph,
 } from "./validator.ts";
 
-type SqlValue = string | number | bigint | null;
-type Row = Record<string, SqlValue>;
 const MAX_SCHEDULE_READY_PREVIEW = 32;
 const MAX_SCHEDULE_RUN_SUMMARIES = 8;
 const MAX_TREE_PROJECTION_RUNS = 10_000;
@@ -90,58 +101,6 @@ type NormalizedChildDescriptor = ChildRunDescriptor & {
   readonly runId: string;
 };
 
-function stringValue(row: Row, key: string): string {
-  const value = row[key];
-  if (typeof value !== "string") {
-    throw new BurnGraphError("CORRUPT_STATE", `Expected ${key} to be text`);
-  }
-  return value;
-}
-
-function optionalString(row: Row, key: string): string | null {
-  const value = row[key];
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "string") {
-    throw new BurnGraphError("CORRUPT_STATE", `Expected ${key} to be nullable text`);
-  }
-  return value;
-}
-
-function numberValue(row: Row, key: string): number {
-  const value = row[key];
-  if (typeof value === "number") return value;
-  if (typeof value === "bigint") return Number(value);
-  throw new BurnGraphError("CORRUPT_STATE", `Expected ${key} to be numeric`);
-}
-
-function parseJson<T>(value: string | null): T | null {
-  return value === null ? null : (JSON.parse(value) as T);
-}
-
-function json(value: unknown): string {
-  return JSON.stringify(value);
-}
-
-function stableJson(value: unknown): string {
-  const normalize = (candidate: unknown): unknown => {
-    if (Array.isArray(candidate)) return candidate.map(normalize);
-    if (
-      candidate !== null &&
-      typeof candidate === "object" &&
-      Object.getPrototypeOf(candidate) === Object.prototype
-    ) {
-      return Object.fromEntries(
-        Object.entries(candidate)
-          .filter(([, entry]) => entry !== undefined)
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, entry]) => [key, normalize(entry)]),
-      );
-    }
-    return candidate;
-  };
-  return JSON.stringify(normalize(value));
-}
-
 function runIdFor(graphId: string, now: Date): string {
   return `${graphId}:run:${now.getTime().toString(36)}:${crypto
     .randomUUID()
@@ -182,11 +141,11 @@ export interface BurnGraphServiceOptions {
   readonly now?: () => Date;
 }
 
-export class BurnGraphService {
+export class BurnGraphServiceBase {
   readonly root: string;
   readonly config: ProjectConfig;
   readonly database: BurnGraphDatabase;
-  private readonly now: () => Date;
+  protected readonly now: () => Date;
 
   constructor(rootInput: string, options: BurnGraphServiceOptions = {}) {
     this.root = discoverProjectRoot(rootInput);
@@ -206,6 +165,7 @@ export class BurnGraphService {
   applyGraph(input: unknown): GraphSpec {
     const validated = validateGraphSpec(input);
     const spec = validated.spec;
+    this.validateCheckReferences(spec);
     this.validateHierarchyReferences(spec);
     const at = this.timestamp();
     this.database.immediate(() => {
@@ -357,6 +317,81 @@ export class BurnGraphService {
     return this.loadGraph(graphId).spec;
   }
 
+  validateCheck(input: unknown): CheckSpec {
+    return validateCheckSpec(input);
+  }
+
+  applyCheck(input: unknown): CheckSpec {
+    const spec = validateCheckSpec(input);
+    const at = this.timestamp();
+    this.database.immediate(() => {
+      const latest = this.database.db
+        .query(
+          `SELECT revision
+             FROM check_specs
+            WHERE check_id = ?
+            ORDER BY revision DESC
+            LIMIT 1`,
+        )
+        .get(spec.id) as Row | null;
+      if (latest && numberValue(latest, "revision") >= spec.revision) {
+        throw new BurnGraphError(
+          "STALE_CHECK_REVISION",
+          `Check ${spec.id} already has revision ${numberValue(latest, "revision")}`,
+          true,
+          { submittedRevision: spec.revision },
+        );
+      }
+      this.database.db
+        .query(
+          `INSERT INTO check_specs (
+             check_id, revision, document_json, created_at
+           ) VALUES (?, ?, ?, ?)`,
+        )
+        .run(spec.id, spec.revision, json(spec), at);
+    });
+    try {
+      writeCheckSpec(this.root, spec);
+    } catch (error) {
+      this.database.immediate(() => {
+        this.database.db
+          .query(
+            `DELETE FROM check_specs
+              WHERE check_id = ? AND revision = ?`,
+          )
+          .run(spec.id, spec.revision);
+      });
+      throw error;
+    }
+    return spec;
+  }
+
+  listChecks(): readonly CheckSpec[] {
+    return this.database.read(() => {
+      const rows = this.database.db
+        .query(
+          `SELECT c.document_json
+             FROM check_specs c
+             JOIN (
+               SELECT check_id, MAX(revision) AS revision
+                 FROM check_specs
+                GROUP BY check_id
+             ) latest
+               ON latest.check_id = c.check_id
+              AND latest.revision = c.revision
+            ORDER BY c.check_id`,
+        )
+        .all() as Row[];
+      return rows.map((row) =>
+        validateCheckSpec(JSON.parse(stringValue(row, "document_json"))),
+      );
+    });
+  }
+
+  getCheck(checkId: string, revision?: number): CheckSpec {
+    return this.loadCheck(checkId, revision);
+  }
+
   cloneGraph(sourceId: string, targetId: string, title?: string): GraphSpec {
     IdentifierSchema.parse(targetId);
     const source = this.loadGraph(sourceId).spec;
@@ -368,45 +403,16 @@ export class BurnGraphService {
     });
   }
 
-  private assertSystemNodesExecutable(
-    spec: GraphSpec,
-    visited = new Set<string>(),
-  ): void {
-    const identity = `${spec.id}@${spec.revision}`;
-    if (visited.has(identity)) return;
-    visited.add(identity);
-
-    const unavailable = spec.nodes.find(
-      (node) => node.type === "gate" || node.type === "wait",
-    );
-    if (unavailable) {
-      throw new BurnGraphError(
-        "SYSTEM_NODE_UNAVAILABLE",
-        `${unavailable.type} node ${unavailable.id} requires the System Node Driver`,
-        false,
-        {
-          graphId: spec.id,
-          revision: spec.revision,
-          nodeId: unavailable.id,
-          nodeType: unavailable.type,
-        },
-      );
-    }
-
+  private validateCheckReferences(spec: GraphSpec): void {
     for (const node of spec.nodes) {
-      if (node.type !== "subgraph" || node.mode !== "static") continue;
-      for (const child of node.children ?? []) {
-        this.assertSystemNodesExecutable(
-          this.loadGraph(child.graphId, child.revision).spec,
-          visited,
-        );
-      }
+      if (node.type !== "gate" || !node.check) continue;
+      this.loadCheck(node.check.id, node.check.revision);
     }
   }
 
   startRun(graphId: string, requestedRunId?: string): MutationResult<GraphSnapshot> {
     const validated = this.loadGraph(graphId);
-    this.assertSystemNodesExecutable(validated.spec);
+    this.validateCheckReferences(validated.spec);
     const now = this.now();
     const at = now.toISOString();
     const runId = requestedRunId ?? runIdFor(graphId, now);
@@ -860,13 +866,18 @@ export class BurnGraphService {
       const placeholders = ids.map(() => "?").join(", ");
       const live = this.database.db
         .query(
-          `SELECT COUNT(*) AS count
-             FROM node_runs
-            WHERE run_id IN (${placeholders})
-              AND status = 'running'
-              AND assignment_id IS NOT NULL`,
+          `SELECT
+             (SELECT COUNT(*)
+                FROM node_runs
+               WHERE run_id IN (${placeholders})
+                 AND status = 'running'
+                 AND assignment_id IS NOT NULL) +
+             (SELECT COUNT(*)
+                FROM check_executions
+               WHERE run_id IN (${placeholders})
+                 AND status = 'claimed') AS count`,
         )
-        .get(...ids) as Row;
+        .get(...ids, ...ids) as Row;
       const nextStatus = numberValue(live, "count") > 0 ? "pausing" : "paused";
       this.database.db
         .query(
@@ -944,6 +955,34 @@ export class BurnGraphService {
       const liveIds = liveRows.map((row) => stringValue(row, "run_id"));
       const placeholders = ids.map(() => "?").join(", ");
       const livePlaceholders = liveIds.map(() => "?").join(", ");
+      for (const row of tree) {
+        const pauseRequestedAt = optionalString(row, "pause_requested_at");
+        if (pauseRequestedAt === null) continue;
+        const pausedMs = Math.max(
+          0,
+          new Date(at).getTime() - new Date(pauseRequestedAt).getTime(),
+        );
+        const signals = this.database.db
+          .query(
+            `SELECT signal_id, deadline_at
+               FROM wait_signals
+              WHERE run_id = ? AND status = 'waiting'
+                AND deadline_at IS NOT NULL`,
+          )
+          .all(stringValue(row, "run_id")) as Row[];
+        for (const signal of signals) {
+          const shifted = new Date(
+            new Date(stringValue(signal, "deadline_at")).getTime() + pausedMs,
+          ).toISOString();
+          this.database.db
+            .query(
+              `UPDATE wait_signals
+                  SET deadline_at = ?, updated_at = ?
+                WHERE signal_id = ?`,
+            )
+            .run(shifted, at, stringValue(signal, "signal_id"));
+        }
+      }
       this.database.db
         .query(
           `UPDATE runs
@@ -1025,17 +1064,62 @@ export class BurnGraphService {
       );
       const ids = tree.map((row) => stringValue(row, "run_id"));
       const placeholders = ids.map(() => "?").join(", ");
+      const liveGates = this.database.db
+        .query(
+          `SELECT execution_id, run_id, node_id, attempt
+             FROM check_executions
+            WHERE run_id IN (${placeholders}) AND status = 'claimed'
+            ORDER BY run_id, node_id`,
+        )
+        .all(...ids) as Row[];
+      const waits = this.database.db
+        .query(
+          `SELECT signal_id
+             FROM wait_signals
+            WHERE run_id IN (${placeholders}) AND status = 'waiting'`,
+        )
+        .all(...ids) as Row[];
+      this.database.db
+        .query(
+          `UPDATE check_executions
+              SET status = 'stale'
+            WHERE run_id IN (${placeholders}) AND status = 'claimed'`,
+        )
+        .run(...ids);
+      this.database.db
+        .query(
+          `UPDATE wait_signals
+              SET status = 'stale', updated_at = ?
+            WHERE run_id IN (${placeholders}) AND status = 'waiting'`,
+        )
+        .run(at, ...ids);
       this.database.db
         .query(
           `UPDATE attempts
               SET status = 'cancelled', finished_at = ?
-            WHERE run_id IN (${placeholders}) AND finished_at IS NULL`,
+            WHERE run_id IN (${placeholders}) AND finished_at IS NULL
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM check_executions e
+                 WHERE e.run_id = attempts.run_id
+                   AND e.node_id = attempts.node_id
+                   AND e.attempt = attempts.attempt
+                   AND e.status = 'stale'
+              )`,
         )
         .run(at, ...ids);
       this.database.db
         .query(
           `UPDATE node_runs
               SET status = CASE
+                    WHEN EXISTS (
+                      SELECT 1
+                        FROM check_executions e
+                       WHERE e.run_id = node_runs.run_id
+                         AND e.node_id = node_runs.node_id
+                         AND e.attempt = node_runs.attempt
+                         AND e.status = 'stale'
+                    ) THEN 'running'
                     WHEN status IN
                          ('pending', 'ready', 'running', 'waiting', 'blocked')
                     THEN 'cancelled' ELSE status END,
@@ -1051,20 +1135,22 @@ export class BurnGraphService {
       this.database.db
         .query(
           `UPDATE runs
-              SET status = 'cancelled', cancel_requested_at = ?,
+              SET status = ?, cancel_requested_at = ?,
                   focused_node_id = NULL, pause_scope_run_id = NULL,
                   runtime_revision = runtime_revision + 1,
                   updated_at = ?
             WHERE run_id IN (${placeholders})`,
         )
-        .run(at, at, ...ids);
-      this.database.db
-        .query(
-          `UPDATE subgraph_links
-              SET outcome = 'cancelled', updated_at = ?
-            WHERE child_run_id IN (${placeholders})`,
-        )
-        .run(at, ...ids);
+        .run(liveGates.length > 0 ? "cancelling" : "cancelled", at, at, ...ids);
+      if (liveGates.length === 0) {
+        this.database.db
+          .query(
+            `UPDATE subgraph_links
+                SET outcome = 'cancelled', updated_at = ?
+              WHERE child_run_id IN (${placeholders})`,
+          )
+          .run(at, ...ids);
+      }
       const changes: RuntimeChange[] = [];
       let rootSequence = 0;
       for (const row of tree) {
@@ -1077,15 +1163,29 @@ export class BurnGraphService {
           runId: affectedRunId,
           graphId: stringValue(row, "graph_id"),
           nodeId: null,
-          type: "run.cancelled",
-          summary: `Cancelled run ${affectedRunId}.`,
-          payload: { rootRequestRunId: runId, revision },
+          type: liveGates.length > 0 ? "run.cancelling" : "run.cancelled",
+          summary:
+            liveGates.length > 0
+              ? `Run ${affectedRunId} is waiting for ${liveGates.length} stale Gate execution(s).`
+              : `Cancelled run ${affectedRunId}.`,
+          payload: {
+            rootRequestRunId: runId,
+            staleGateExecutions: liveGates.map((gate) =>
+              stringValue(gate, "execution_id"),
+            ),
+            staleSignals: waits.map((wait) =>
+              stringValue(wait, "signal_id"),
+            ),
+            revision,
+          },
           at,
         });
         if (affectedRunId === runId) rootSequence = sequence;
         changes.push({ revision, event: this.getEvent(sequence) });
       }
-      changes.push(...this.settleAncestors(runId, at));
+      if (liveGates.length === 0) {
+        changes.push(...this.settleAncestors(runId, at));
+      }
       return { rootSequence, changes };
       },
     );
@@ -2007,7 +2107,7 @@ export class BurnGraphService {
     };
   }
 
-  private observeSchedule(
+  observeSchedule(
     actorId: string,
     preferredRunId?: string,
   ): WorkSchedule {
@@ -2049,6 +2149,82 @@ export class BurnGraphService {
       runs,
       changes: [],
     };
+  }
+
+  storeAssignmentContinuation(
+    assignmentId: string,
+    continuation: unknown,
+  ): void {
+    const result = this.database.db
+      .query(
+        `UPDATE attempts
+            SET continuation_json = ?
+          WHERE assignment_id = ?`,
+      )
+      .run(json(continuation), assignmentId);
+    if (result.changes !== 1) {
+      throw new BurnGraphError(
+        "ASSIGNMENT_NOT_FOUND",
+        `Unknown Assignment ${assignmentId}`,
+      );
+    }
+  }
+
+  storeLifecycleContinuation(
+    operation: LifecycleOperation,
+    idempotencyKey: string,
+    continuation: unknown,
+  ): void {
+    const key = IdempotencyKeySchema.parse(idempotencyKey);
+    const result = this.database.db
+      .query(
+        `UPDATE lifecycle_requests
+            SET continuation_json = ?
+          WHERE idempotency_key = ? AND operation = ?`,
+      )
+      .run(json(continuation), key, operation);
+    if (result.changes !== 1) {
+      throw new BurnGraphError(
+        "IDEMPOTENCY_KEY_CONFLICT",
+        `No ${operation} request owns idempotency key ${key}`,
+      );
+    }
+  }
+
+  signalContinuation(signalId: string): unknown | null {
+    const row = this.database.db
+      .query(
+        `SELECT continuation_json
+           FROM wait_signals
+          WHERE signal_id = ?`,
+      )
+      .get(signalId) as Row | null;
+    if (!row) {
+      throw new BurnGraphError(
+        "SIGNAL_NOT_FOUND",
+        `Unknown Signal ${signalId}`,
+      );
+    }
+    return parseJson(optionalString(row, "continuation_json"));
+  }
+
+  storeSignalContinuation(
+    signalId: string,
+    continuation: unknown,
+  ): void {
+    const result = this.database.db
+      .query(
+        `UPDATE wait_signals
+            SET continuation_json = ?
+          WHERE signal_id = ?`,
+      )
+      .run(json(continuation), signalId);
+    if (result.changes !== 1) {
+      throw new BurnGraphError(
+        "SIGNAL_NOT_FOUND",
+        `Unknown Signal ${signalId}`,
+      );
+    }
   }
 
   startWithAssignments(
@@ -2528,7 +2704,7 @@ export class BurnGraphService {
 
   projectSnapshot(): {
     readonly projectId: string;
-    readonly graphs: ReturnType<BurnGraphService["listGraphs"]>;
+    readonly graphs: ReturnType<BurnGraphServiceBase["listGraphs"]>;
     readonly runs: readonly GraphSummary[];
     readonly rootRuns: readonly PortfolioRun[];
     readonly lastEventSequence: number;
@@ -2579,7 +2755,7 @@ export class BurnGraphService {
     });
   }
 
-  private timestamp(): string {
+  protected timestamp(): string {
     return this.now().toISOString();
   }
 
@@ -2716,7 +2892,38 @@ export class BurnGraphService {
     return validateGraphSpec(JSON.parse(stringValue(row, "document_json")));
   }
 
-  private graphForRun(runId: string): ValidatedGraph {
+  protected loadCheck(checkId: string, revision?: number): CheckSpec {
+    IdentifierSchema.parse(checkId);
+    let row: Row | null;
+    if (revision === undefined) {
+      row = this.database.db
+        .query(
+          `SELECT document_json
+             FROM check_specs
+            WHERE check_id = ?
+            ORDER BY revision DESC
+            LIMIT 1`,
+        )
+        .get(checkId) as Row | null;
+    } else {
+      row = this.database.db
+        .query(
+          `SELECT document_json
+             FROM check_specs
+            WHERE check_id = ? AND revision = ?`,
+        )
+        .get(checkId, revision) as Row | null;
+    }
+    if (!row) {
+      throw new BurnGraphError(
+        "CHECK_NOT_FOUND",
+        `Unknown Check ${checkId}${revision === undefined ? "" : `@${revision}`}`,
+      );
+    }
+    return validateCheckSpec(JSON.parse(stringValue(row, "document_json")));
+  }
+
+  protected graphForRun(runId: string): ValidatedGraph {
     const row = this.runRow(runId);
     return this.loadGraph(
       stringValue(row, "graph_id"),
@@ -2746,7 +2953,7 @@ export class BurnGraphService {
     return graph ? stringValue(graph, "run_id") : null;
   }
 
-  private resolveRun(reference: string): string {
+  protected resolveRun(reference: string): string {
     const runId = this.tryResolveRun(reference);
     if (!runId) {
       throw new BurnGraphError("RUN_NOT_FOUND", `Unknown run or graph ${reference}`);
@@ -2754,7 +2961,7 @@ export class BurnGraphService {
     return runId;
   }
 
-  private runRow(runId: string): Row {
+  protected runRow(runId: string): Row {
     const row = this.database.db
       .query("SELECT * FROM runs WHERE run_id = ?")
       .get(runId) as Row | null;
@@ -2762,7 +2969,7 @@ export class BurnGraphService {
     return row;
   }
 
-  private descendantRunRows(runId: string): readonly Row[] {
+  protected descendantRunRows(runId: string): readonly Row[] {
     return this.database.db
       .query(
         `WITH RECURSIVE tree(run_id) AS (
@@ -2780,7 +2987,7 @@ export class BurnGraphService {
       .all(runId) as Row[];
   }
 
-  private quiescePauseContainingRun(
+  protected quiescePauseContainingRun(
     runId: string,
     at: string,
   ): readonly RuntimeChange[] {
@@ -2800,15 +3007,22 @@ export class BurnGraphService {
     if (pausing.length === 0) return [];
     const live = this.database.db
       .query(
-        `SELECT COUNT(*) AS count
-           FROM node_runs n
-           JOIN runs r ON r.run_id = n.run_id
-          WHERE r.pause_scope_run_id = ?
-            AND r.status = 'pausing'
-            AND n.status = 'running'
-            AND n.assignment_id IS NOT NULL`,
+        `SELECT
+           (SELECT COUNT(*)
+              FROM node_runs n
+              JOIN runs r ON r.run_id = n.run_id
+             WHERE r.pause_scope_run_id = ?
+               AND r.status = 'pausing'
+               AND n.status = 'running'
+               AND n.assignment_id IS NOT NULL) +
+           (SELECT COUNT(*)
+              FROM check_executions e
+              JOIN runs r ON r.run_id = e.run_id
+             WHERE r.pause_scope_run_id = ?
+               AND r.status = 'pausing'
+               AND e.status = 'claimed') AS count`,
       )
-      .get(pauseScopeRunId) as Row;
+      .get(pauseScopeRunId, pauseScopeRunId) as Row;
     if (numberValue(live, "count") > 0) return [];
 
     this.database.db
@@ -2839,7 +3053,7 @@ export class BurnGraphService {
     });
   }
 
-  private nodeRow(runId: string, nodeId: string): Row {
+  protected nodeRow(runId: string, nodeId: string): Row {
     const row = this.database.db
       .query(
         `SELECT *
@@ -3181,7 +3395,7 @@ export class BurnGraphService {
       .run(at, runId, nodeId);
   }
 
-  private selectDecisionEdge(
+  protected selectDecisionEdge(
     runId: string,
     nodeId: string,
     route: string,
@@ -3270,7 +3484,7 @@ export class BurnGraphService {
         descriptor.graphId,
         descriptor.revision,
       ).spec;
-      this.assertSystemNodesExecutable(childGraph);
+      this.validateCheckReferences(childGraph);
       requestedDescendants +=
         1 +
         this.assertStaticDescendantsAvoidAncestors(
@@ -3558,7 +3772,7 @@ export class BurnGraphService {
     return normalized;
   }
 
-  private driveStaticSubgraphs(
+  protected driveStaticSubgraphs(
     runId: string,
     at: string,
     changes: Array<Record<string, unknown>>,
@@ -3709,7 +3923,7 @@ export class BurnGraphService {
     ];
   }
 
-  private settleAncestors(
+  protected settleAncestors(
     childRunId: string,
     at: string,
   ): readonly RuntimeChange[] {
@@ -3732,7 +3946,7 @@ export class BurnGraphService {
     return settled;
   }
 
-  private cascade(
+  protected cascade(
     graph: ValidatedGraph,
     runId: string,
     at: string,
@@ -3853,7 +4067,7 @@ export class BurnGraphService {
     });
   }
 
-  private refreshRunTerminalStatus(runId: string, at: string): void {
+  protected refreshRunTerminalStatus(runId: string, at: string): void {
     const failed = this.database.db
       .query(
         `SELECT COUNT(*) AS count
@@ -4118,7 +4332,7 @@ export class BurnGraphService {
     };
   }
 
-  private bumpRun(
+  protected bumpRun(
     runId: string,
     at: string,
     status?: GraphStatus,
@@ -4140,7 +4354,7 @@ export class BurnGraphService {
     return numberValue(this.runRow(runId), "runtime_revision");
   }
 
-  private appendEvent(input: {
+  protected appendEvent(input: {
     readonly runId: string;
     readonly graphId: string;
     readonly nodeId: string | null;
@@ -4167,7 +4381,7 @@ export class BurnGraphService {
     return Number(result.lastInsertRowid);
   }
 
-  private getEvent(sequence: number): GraphEvent {
+  protected getEvent(sequence: number): GraphEvent {
     const row = this.database.db
       .query("SELECT * FROM events WHERE sequence = ?")
       .get(sequence) as Row | null;
@@ -4371,14 +4585,6 @@ export class BurnGraphService {
       value: this.runtimeNode(this.nodeRow(runId, nodeId)),
     };
   }
-}
-
-function optionalNumber(row: Row, key: string): number | null {
-  const value = row[key];
-  if (value === null || value === undefined) return null;
-  if (typeof value === "number") return value;
-  if (typeof value === "bigint") return Number(value);
-  throw new BurnGraphError("CORRUPT_STATE", `Expected ${key} to be nullable number`);
 }
 
 function edgeStatus(row: Row): RuntimeEdge["status"] {

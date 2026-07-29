@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-dev6-package-closure",
+  "title": "Close dev.6 package contract",
+  "goal": "Use the shipped Machine Gate to prove UP07 and UP08 through both source and the isolated dev.6 package after correcting the acceptance gap.",
+  "revision": 1,
+  "maxActive": 1,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start closure",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "repair-package-e2e"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "repair-package-e2e",
+      "type": "task",
+      "title": "Close isolated-package UP07 and UP08",
+      "prompt": {
+        "objective": "Ensure the installed archive replays the full known-bad Gate repair and durable Wait restart path, not reduced smoke tests.",
+        "instructions": [
+          "Reuse the same Graph fixtures for source and installed-package paths.",
+          "Assert known-bad rejection, repair, pinned Check success, Signal restart, idempotent replay, and bounded public evidence."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M06-system-nodes.md",
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "tests/e2e/system-nodes-workflow.test.ts",
+          "tests/e2e/install-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "Source and isolated package both replay UP07 and UP08.",
+          "The installed archive rejects bad evidence before End.",
+          "The installed Wait survives separate CLI processes and replay is inert."
+        ],
+        "outputSchema": null,
+        "role": "dev.6 package-gap repair",
+        "lockedContracts": [
+          "../privacy/milestones/M06-system-nodes.md",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "tests/e2e",
+          "tests/helpers"
+        ],
+        "forbidden": [
+          "Do not replace the full paths with smoke assertions.",
+          "Do not weaken the source path while sharing fixtures."
+        ],
+        "runtime": [
+          "bun run release:pack",
+          "bun test tests/e2e/system-nodes-workflow.test.ts tests/e2e/install-workflow.test.ts"
+        ]
+      },
+      "next": [
+        {
+          "to": "package-contract"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "repair",
+        "package"
+      ],
+      "resources": []
+    },
+    {
+      "id": "package-contract",
+      "type": "gate",
+      "title": "Run source and installed package contract",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "accept",
+          "route": "pass"
+        },
+        {
+          "to": "accept",
+          "route": "fail"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "machine-gate"
+      ],
+      "check": {
+        "id": "selfhost-dev6-package-contract",
+        "revision": 1
+      },
+      "resources": [
+        "release-archive"
+      ]
+    },
+    {
+      "id": "accept",
+      "type": "decision",
+      "title": "Accept or repair package closure",
+      "prompt": {
+        "objective": "Accept only when the registered package contract Gate passed and public Evidence remains bounded.",
+        "instructions": [
+          "Choose repair when the Gate failed or any M06 package clause remains unproved."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M06-system-nodes.md",
+          "tests/e2e/system-nodes-workflow.test.ts",
+          "tests/e2e/install-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "The pinned Gate classification is success.",
+          "Both source and isolated archive paths pass without leaked private output."
+        ],
+        "outputSchema": null,
+        "role": "dev.6 package closure decision",
+        "lockedContracts": [
+          "../privacy/milestones/M06-system-nodes.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass after a failed machine Gate."
+        ],
+        "runtime": [
+          "burn-graph inspect executions selfhost-dev6-package-closure-r1"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass"
+        },
+        {
+          "to": "repair-package-e2e",
+          "route": "repair",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "decision"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Package contract closed",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

@@ -14,7 +14,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.5.tgz",
+  "burn-graph-0.1.0-dev.6.tgz",
 );
 const roots: string[] = [];
 const preserveEvidenceFixture =

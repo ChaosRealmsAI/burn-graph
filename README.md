@@ -10,7 +10,7 @@ unlocks and returns successors across parallel nodes and multiple graphs.
 With Bun 1.2.17 or newer, installation is one local package command:
 
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.5.tgz
+bun add --global ./burn-graph-0.1.0-dev.6.tgz
 burn-graph --version
 ```
 
@@ -33,9 +33,14 @@ burn-graph render delivery
 burn-graph viewer start delivery --port 4173 --open
 ```
 
+Registered machine Checks and durable Wait Signals are System Nodes: mutating
+loop commands converge them automatically, while `current`, `inspect`,
+`render`, Viewer, and `doctor` stay read-only.
+
 Graph specifications are inspectable JSON, runtime state is transactional
 SQLite, and the human surface is a local read-only Mermaid viewer.
-Applied definitions live in `.burn-graph/graphs/` and can be versioned;
+Applied definitions live in `.burn-graph/graphs/` and immutable Checks in
+`.burn-graph/checks/`; both can be versioned;
 ephemeral SQLite state stays ignored beneath `.burn-graph/runtime/`.
 
 `render` returns metadata for a cached project-local SVG by default; use

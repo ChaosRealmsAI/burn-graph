@@ -1,0 +1,388 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-dev6-gate",
+  "title": "Deliver dev.6 Machine Gate",
+  "goal": "Ship one pinned, bounded, exact-process machine Gate that rejects bad evidence and unlocks repair without weakening Assignment safety.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start Gate slice",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "gate-contract"
+        },
+        {
+          "to": "process-poc"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "gate"
+      ]
+    },
+    {
+      "id": "gate-contract",
+      "type": "task",
+      "title": "Make Gate contracts executable",
+      "prompt": {
+        "objective": "Add known-red contract tests for CheckSpec registration, pinned Gate transitions, stale execution tokens, bounded public evidence, and failure routing.",
+        "instructions": [
+          "Test only public Core or CLI contracts.",
+          "Prove invalid CheckSpec and missing revisions fail before Run mutation.",
+          "Keep output classification and digest separate from bounded local bytes."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "../privacy/slices/S10-machine-gate/slice.md",
+          "../privacy/slices/S10-machine-gate/versions/0.1.0-dev.6/plan.md",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/storage.ts",
+          "tests/integration/authoring-v2.test.ts"
+        ],
+        "doneWhen": [
+          "Valid and invalid CheckSpec revisions have stable expected results.",
+          "Known-bad, stale-token, duplicate-claim, blocked-spawn, and route cases fail against dev.5 for the intended reason.",
+          "Tests assert no shell string, environment value, or raw output reaches public events."
+        ],
+        "outputSchema": null,
+        "role": "S10 contract owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "tests/gate",
+          "tests/integration",
+          "tests/unit"
+        ],
+        "forbidden": [
+          "Do not implement the candidate while defining the red contract.",
+          "Do not alter Wait behavior."
+        ],
+        "runtime": [
+          "bun test tests/gate"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "gate",
+        "contract"
+      ],
+      "resources": []
+    },
+    {
+      "id": "process-poc",
+      "type": "task",
+      "title": "Prove exact-process timeout safety",
+      "prompt": {
+        "objective": "Build the smallest PoC proving exact argv execution, bounded capture, timeout through the held child handle, and sentinel survival.",
+        "instructions": [
+          "Use a deterministic project-local fixture.",
+          "Capture the exact process handle directly; never search by PID or name.",
+          "Record what an uncatchable host kill cannot guarantee."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/slices/S10-machine-gate/versions/0.1.0-dev.6/plan.md",
+          "packages/render/src/browser.ts",
+          "tests/e2e/render-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "A timed-out child stops while an independent sentinel remains alive.",
+          "No shell or broad process command appears in the PoC.",
+          "Output and elapsed time are bounded and reproducible."
+        ],
+        "outputSchema": null,
+        "role": "S10 process-safety PoC owner",
+        "lockedContracts": [
+          "../privacy/architecture.md"
+        ],
+        "writablePaths": [
+          "pocs/gate-runner",
+          "tests/gate"
+        ],
+        "forbidden": [
+          "Do not signal a process not created by this PoC.",
+          "Do not reuse a browser or terminal process."
+        ],
+        "runtime": [
+          "bun test tests/gate"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "gate",
+        "poc"
+      ],
+      "resources": []
+    },
+    {
+      "id": "contract-join",
+      "type": "join",
+      "title": "Converge Gate oracles",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "gate-implement"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "gate"
+      ]
+    },
+    {
+      "id": "gate-implement",
+      "type": "task",
+      "title": "Implement Check Registry and Gate Runner",
+      "prompt": {
+        "objective": "Implement immutable CheckSpec revisions, two-phase Gate execution, exact-process Runner, resource ownership, bounded evidence, and CLI authoring/inspection.",
+        "instructions": [
+          "Keep process execution outside every SQLite transaction.",
+          "Persist an opaque execution identity and accept only its current token.",
+          "Treat configuration and spawn failures as Blocked; only exit or timeout selects fail.",
+          "Create cohesive Gate modules instead of expanding the Core service monolith."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "packages/core/src/service.ts",
+          "packages/core/src/storage.ts",
+          "apps/cli/src/index.ts",
+          "docs/cli.md"
+        ],
+        "doneWhen": [
+          "Check validate/apply/list/show use stable JSON envelopes.",
+          "Eligible Gate work claims once, runs exact argv without a shell, and reports through one opaque execution handle.",
+          "Pass, fail, Blocked, timeout, stale output, cancellation, and reconciliation satisfy focused tests.",
+          "Progressive Help and bounded inspection expose recovery without raw command output."
+        ],
+        "outputSchema": null,
+        "role": "S10 implementation owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "packages/gate",
+          "packages/core/src/gate.ts",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/storage.ts",
+          "packages/core/src/service.ts",
+          "packages/system-driver",
+          "apps/cli/src/commands/check.ts",
+          "apps/cli/src/index.ts",
+          "docs",
+          "tests/gate"
+        ],
+        "forbidden": [
+          "No shell invocation or command interpolation.",
+          "No inherited environment except declared names.",
+          "No broad process lookup or unowned signal.",
+          "No raw Check output in events, Assignments, Viewer, render, or Evidence."
+        ],
+        "runtime": [
+          "bun run check",
+          "bun test tests/gate"
+        ]
+      },
+      "next": [
+        {
+          "to": "gate-self-verify"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "gate",
+        "implement"
+      ],
+      "resources": []
+    },
+    {
+      "id": "gate-self-verify",
+      "type": "task",
+      "title": "Verify Gate recovery and safety",
+      "prompt": {
+        "objective": "Exercise Gate success, known-bad repair, timeout, missing executable, stale execution, cancellation, resource release, package behavior, and public evidence bounds.",
+        "instructions": [
+          "Run real child processes only from test-owned fixtures.",
+          "Include one sentinel and one stale-token control.",
+          "Verify source CLI before isolated-package replay."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "tests/gate",
+          "tests/e2e",
+          "scripts/build/package.ts"
+        ],
+        "doneWhen": [
+          "The bad fixture cannot reach End and returns one repair Assignment.",
+          "The fixed fixture passes the same pinned Check revision.",
+          "Timeout stops only the exact child and sentinel survival is observed.",
+          "No duplicate accepted execution, leaked resource, secret, or unbounded output remains."
+        ],
+        "outputSchema": null,
+        "role": "S10 self-verifier",
+        "lockedContracts": [
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "tests/gate",
+          "tests/e2e",
+          "scripts/verify"
+        ],
+        "forbidden": [
+          "Do not weaken assertions to pass.",
+          "Do not inspect or stop unrelated user processes."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "gate-review"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "gate",
+        "verify"
+      ],
+      "resources": []
+    },
+    {
+      "id": "gate-review",
+      "type": "decision",
+      "title": "Accept or repair Machine Gate",
+      "prompt": {
+        "objective": "Select pass only when UP07 and every Gate-owned S06 clause pass with exact process, persistence, security, recovery, and package evidence.",
+        "instructions": [
+          "Choose repair for any shell, path, environment, process-owner, stale-token, duplicate-work, output-bound, or package blocker.",
+          "Cite exact commands and known-bad controls."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M06-system-nodes.md",
+          "../privacy/user-paths/UP07-machine-gated-repair.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "../privacy/project.json",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "All Gate contract, source, installed-package, timeout, sentinel, and recovery Gates pass.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "S10 quality decision",
+        "lockedContracts": [
+          "../privacy/milestones/M06-system-nodes.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass from a partial or source-only verification."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "Gate verified"
+        },
+        {
+          "to": "gate-implement",
+          "route": "repair",
+          "label": "Repair Gate",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "gate",
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Machine Gate ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "gate"
+      ]
+    }
+  ]
+}

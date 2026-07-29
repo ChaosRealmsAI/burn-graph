@@ -10,6 +10,7 @@ import path from "node:path";
 
 import {
   BurnGraphError,
+  type CheckSpec,
   type GraphSpec,
   type ProjectConfig,
 } from "./contracts.ts";
@@ -45,6 +46,7 @@ export function initializeProject(rootInput: string, now: string): ProjectConfig
     );
   }
   mkdirSync(path.join(stateRoot, "graphs"), { recursive: true, mode: 0o700 });
+  mkdirSync(path.join(stateRoot, "checks"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(stateRoot, "prompts"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(stateRoot, "runtime", "artifacts"), {
     recursive: true,
@@ -133,6 +135,14 @@ export function graphFile(root: string, graphId: string): string {
 
 export function writeGraphSpec(root: string, spec: GraphSpec): void {
   atomicWriteJson(graphFile(root, spec.id), spec);
+}
+
+export function checkFile(root: string, checkId: string): string {
+  return path.join(root, STATE_DIRECTORY, "checks", `${checkId}.json`);
+}
+
+export function writeCheckSpec(root: string, spec: CheckSpec): void {
+  atomicWriteJson(checkFile(root, spec.id), spec);
 }
 
 export function runtimeDatabaseFile(root: string): string {

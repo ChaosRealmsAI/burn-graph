@@ -15,11 +15,11 @@ const dev4Archive = path.join(
   "releases",
   "burn-graph-0.1.0-dev.4.tgz",
 );
-const dev5Archive = path.join(
+const dev6Archive = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.5.tgz",
+  "burn-graph-0.1.0-dev.6.tgz",
 );
 const roots: string[] = [];
 
@@ -73,12 +73,12 @@ afterEach(() => {
   for (const root of roots.splice(0)) removeTestProject(root);
 });
 
-describe("installed dev.4 to dev.5 migration", () => {
+describe("installed dev.4 to dev.6 migration", () => {
   test("preserves nine Runs and ninety public events through the release archive", async () => {
     expect(existsSync(dev4Archive)).toBe(true);
-    expect(existsSync(dev5Archive)).toBe(true);
+    expect(existsSync(dev6Archive)).toBe(true);
     const dev4 = await extractArchive(dev4Archive);
-    const dev5 = await extractArchive(dev5Archive);
+    const dev6 = await extractArchive(dev6Archive);
     const projectRoot = createTestDirectory();
     roots.push(projectRoot);
     await invoke(dev4, projectRoot, ["init"]);
@@ -203,7 +203,7 @@ describe("installed dev.4 to dev.5 migration", () => {
     );
 
     const migratedEvents = (
-      await invoke(dev5, projectRoot, [
+      await invoke(dev6, projectRoot, [
         "inspect",
         "events",
         "--limit",
@@ -226,7 +226,7 @@ describe("installed dev.4 to dev.5 migration", () => {
     for (let index = 1; index <= 9; index += 1) {
       const runId = `legacy-migration:run:${index}`;
       const migrated = (
-        await invoke(dev5, projectRoot, [
+        await invoke(dev6, projectRoot, [
           "inspect",
           "run",
           runId,
@@ -255,7 +255,7 @@ describe("installed dev.4 to dev.5 migration", () => {
       expect(migrated.events).toEqual(before.events);
       expect(
         (
-          await invoke(dev5, projectRoot, [
+          await invoke(dev6, projectRoot, [
             "inspect",
             "node",
             runId,

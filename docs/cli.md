@@ -38,21 +38,22 @@ burn-graph current --actor primary
 burn-graph next --actor primary
 ```
 
-`run start`, `run resume`, `next`, and `done` return zero or more complete
-Assignment packets. Each packet contains an opaque `assignmentId`, Graph and
-node identity, Attempt, prompt contract, direct predecessor context, legal
-Decision routes, lease, and exact return commands. The AI executes the prompt;
-burn-graph never executes it.
+`run start`, `run resume`, `next`, `done`, and routed Signal resolution return
+zero or more complete Assignment packets. Before scheduling AI work, their
+bounded System Node Driver runs only registered Gate Checks and materializes or
+settles durable Waits. Each AI packet contains an opaque `assignmentId`, Graph
+and node identity, Attempt, prompt contract, direct predecessor context, legal
+Decision routes, lease, and exact return commands. burn-graph never executes an
+AI prompt.
 
 `done` is idempotent for the same Assignment ID and byte-equivalent JSON input.
 A different result for an already completed Assignment returns
 `ASSIGNMENT_INPUT_CONFLICT`. Structural Start, Join, Skip, bounded repair, and
 End transitions are automatic.
 
-The dev.5 runtime executes Subgraph but deliberately fails before mutation with
-`SYSTEM_NODE_UNAVAILABLE` when a root or statically reachable child contains
-Gate or Wait. Their GraphSpec shapes can already be validated and registered;
-the Check/Signal System Node Driver becomes executable in dev.6.
+Read-only commands never invoke the System Node Driver. An overdue Wait may be
+visible through inspection but selects its timeout route only on a mutating
+loop or explicit reconciliation command.
 
 Decision completion includes one declared route:
 
@@ -73,10 +74,12 @@ Decision route, summary, and evidence.
 |---|---|
 | Project | `init`, `doctor`, `help` |
 | GraphSpec | `graph validate`, `graph apply`, `graph list`, `graph show`, `graph clone` |
+| CheckSpec | `check validate`, `check apply`, `check list`, `check show` |
 | Run lifecycle | `run start`, `run pause`, `run resume`, `run cancel` |
 | Normal loop | `next`, `current`, `focus`, `done` |
+| External outcome | `signal resolve` |
 | Artifact | `render` with `run` or `tree` scope |
-| Inspection | `inspect overview`, `inspect run`, `inspect tree`, `inspect node`, `inspect ready`, `inspect mermaid`, `inspect events` |
+| Inspection | `inspect overview`, `inspect run`, `inspect tree`, `inspect node`, `inspect ready`, `inspect waits`, `inspect resources`, `inspect executions`, `inspect mermaid`, `inspect events` |
 | Recovery | `recover heartbeat`, `recover checkpoint`, `recover block`, `recover unblock`, `recover release`, `recover fail`, `recover reconcile` |
 | Human Viewer | `viewer start`, `viewer status`, `viewer stop` |
 
@@ -108,6 +111,21 @@ revision, or event; using the key for another operation, Run, or resume Actor
 is rejected. Equivalent `done` replay follows the same rule for its Assignment
 handle. `next` reconciles expired leases automatically, and
 `recover reconcile [run-or-graph]` exposes the exceptional path explicitly.
+
+Resolve a Wait with one declared route and a stable retry key:
+
+```bash
+printf '%s' '{"summary":"Approved","evidence":["evidence/approval.json"]}' |
+  burn-graph signal resolve --signal <opaque-id> --route approved \
+    --actor primary --idempotency-key approval-1 --input -
+```
+
+Without `--actor`, successors remain Ready. Equivalent replay is inert;
+conflicting content or a cancelled Signal cannot unlock work.
+
+Public events and normal-loop responses never contain Check stdout/stderr.
+Use `inspect executions --include-output --output-bytes <1..16384>` for an
+explicit bounded local diagnostic view.
 
 ## Graph artifacts
 
@@ -177,6 +195,7 @@ fail as invalid arguments: `work`, top-level `events`, top-level `mermaid`,
 .burn-graph/
 ├── config.json
 ├── graphs/          # normalized, versionable GraphSpecs
+├── checks/          # normalized, versionable immutable CheckSpecs
 └── runtime/         # ignored SQLite, WAL, Viewer records, and render cache
 ```
 

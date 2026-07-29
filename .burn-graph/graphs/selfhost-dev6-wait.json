@@ -1,0 +1,385 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-dev6-wait",
+  "title": "Deliver dev.6 Durable Wait",
+  "goal": "Ship one restart-safe Wait and opaque Signal flow that consumes no AI slot and settles exactly once.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start Wait slice",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "wait-contract"
+        },
+        {
+          "to": "restart-poc"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "wait"
+      ]
+    },
+    {
+      "id": "wait-contract",
+      "type": "task",
+      "title": "Make Wait contracts executable",
+      "prompt": {
+        "objective": "Add known-red tests for opaque Signal identity, restart persistence, idempotent resolution, timeout reconciliation, pause shifting, cancellation, and no-Actor scheduling.",
+        "instructions": [
+          "Assert Waiting owns no Assignment and consumes no Actor slot.",
+          "Separate read-only overdue observation from mutating reconciliation.",
+          "Keep Signal summaries and evidence bounded and project-relative."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "../privacy/slices/S11-durable-wait/slice.md",
+          "../privacy/slices/S11-durable-wait/versions/0.1.0-dev.6/plan.md",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/storage.ts",
+          "tests/integration/hierarchy.test.ts"
+        ],
+        "doneWhen": [
+          "Restart, equivalent/conflicting resolve, stale Signal, timeout, pause, cancel, Actor/no-Actor, and capacity tests fail against dev.5 for the intended reason.",
+          "Read-only projections prove no revision or route mutation.",
+          "Expected public errors are stable and contain no private payload."
+        ],
+        "outputSchema": null,
+        "role": "S11 contract owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "tests/wait",
+          "tests/integration",
+          "tests/unit"
+        ],
+        "forbidden": [
+          "Do not implement the candidate while defining the red contract.",
+          "Do not alter Gate process behavior."
+        ],
+        "runtime": [
+          "bun test tests/wait"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "wait",
+        "contract"
+      ],
+      "resources": []
+    },
+    {
+      "id": "restart-poc",
+      "type": "task",
+      "title": "Prove Signal restart persistence",
+      "prompt": {
+        "objective": "Persist one Wait, close every service process, reopen the project, and prove the same bounded Signal remains actionable.",
+        "instructions": [
+          "Use only project-local SQLite and public service boundaries.",
+          "Record revision before and after read-only overdue inspection.",
+          "Exercise unrelated AI scheduling while the Signal waits."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "packages/core/src/storage.ts",
+          "packages/core/src/service.ts",
+          "tests/integration/hierarchy.test.ts"
+        ],
+        "doneWhen": [
+          "The Signal ID and legal routes survive process restart.",
+          "No Assignment is created for Wait.",
+          "Read-only overdue inspection is inert."
+        ],
+        "outputSchema": null,
+        "role": "S11 persistence PoC owner",
+        "lockedContracts": [
+          "../privacy/architecture.md"
+        ],
+        "writablePaths": [
+          "pocs/wait-signal",
+          "tests/wait"
+        ],
+        "forbidden": [
+          "Do not require a resident daemon.",
+          "Do not use wall-clock sleeps as the primary oracle."
+        ],
+        "runtime": [
+          "bun test tests/wait"
+        ]
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "wait",
+        "poc"
+      ],
+      "resources": []
+    },
+    {
+      "id": "contract-join",
+      "type": "join",
+      "title": "Converge Wait oracles",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "wait-implement"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "wait"
+      ]
+    },
+    {
+      "id": "wait-implement",
+      "type": "task",
+      "title": "Implement Wait Signals",
+      "prompt": {
+        "objective": "Implement persistent Wait transitions, opaque Signal resolution, deadline reconciliation, pause/resume shifting, cancellation staleness, inspection, and progressive CLI Help.",
+        "instructions": [
+          "Settle System Nodes transactionally without creating an AI Assignment.",
+          "Equivalent Signal resolution returns the original receipt; conflicts never mutate.",
+          "Advance overdue routes only from bounded mutating entry points."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "packages/core/src/service.ts",
+          "packages/core/src/storage.ts",
+          "apps/cli/src/index.ts",
+          "docs/cli.md"
+        ],
+        "doneWhen": [
+          "Wait enters Waiting with one opaque Signal and no Assignment.",
+          "Resolve with and without Actor follows normal capacity and returns bounded successors.",
+          "Restart, timeout, pause, resume, cancellation, replay, conflict, and stale handles satisfy focused tests.",
+          "CLI inspection and Help expose safe recovery without private payloads."
+        ],
+        "outputSchema": null,
+        "role": "S11 implementation owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "packages/core/src/wait.ts",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/storage.ts",
+          "packages/core/src/service.ts",
+          "packages/system-driver",
+          "apps/cli/src/commands/signal.ts",
+          "apps/cli/src/index.ts",
+          "docs",
+          "tests/wait"
+        ],
+        "forbidden": [
+          "No resident daemon.",
+          "No read-only mutation.",
+          "No Signal payload, secret, or absolute path in public state."
+        ],
+        "runtime": [
+          "bun run check",
+          "bun test tests/wait"
+        ]
+      },
+      "next": [
+        {
+          "to": "wait-self-verify"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "wait",
+        "implement"
+      ],
+      "resources": []
+    },
+    {
+      "id": "wait-self-verify",
+      "type": "task",
+      "title": "Verify Wait restart and lifecycle",
+      "prompt": {
+        "objective": "Exercise restart, unrelated scheduling, idempotent/conflicting Signal resolution, read-only overdue state, explicit timeout reconciliation, pause duration, cancellation, package behavior, and bounded context.",
+        "instructions": [
+          "Use injected clocks for timeout or pause assertions.",
+          "Restart the service between Wait creation and resolution.",
+          "Verify both resolve modes: without Actor and with Actor."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "tests/wait",
+          "tests/e2e",
+          "scripts/build/package.ts"
+        ],
+        "doneWhen": [
+          "One Signal settles exactly once across restart.",
+          "Unrelated work advances while Wait owns no Actor slot.",
+          "Pause excludes frozen duration and cancellation makes the Signal stale.",
+          "Source and isolated-package UP08 pass without leaked payloads."
+        ],
+        "outputSchema": null,
+        "role": "S11 self-verifier",
+        "lockedContracts": [
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "../privacy/bdd/S06-system-nodes.feature"
+        ],
+        "writablePaths": [
+          "tests/wait",
+          "tests/e2e",
+          "scripts/verify"
+        ],
+        "forbidden": [
+          "Do not weaken assertions to pass.",
+          "Do not use unbounded sleep or output."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "wait-review"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "wait",
+        "verify"
+      ],
+      "resources": []
+    },
+    {
+      "id": "wait-review",
+      "type": "decision",
+      "title": "Accept or repair Durable Wait",
+      "prompt": {
+        "objective": "Select pass only when UP08 and every Wait-owned S06 clause pass with persistence, timeout, lifecycle, privacy, capacity, and package evidence.",
+        "instructions": [
+          "Choose repair for any duplicate settlement, stale Signal mutation, read-only mutation, Actor-capacity, clock, payload, or package blocker.",
+          "Cite exact commands and restart controls."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M06-system-nodes.md",
+          "../privacy/user-paths/UP08-durable-wait.md",
+          "../privacy/bdd/S06-system-nodes.feature",
+          "../privacy/project.json",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "All Wait contract, source, installed-package, restart, timeout, and lifecycle Gates pass.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "S11 quality decision",
+        "lockedContracts": [
+          "../privacy/milestones/M06-system-nodes.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass from a partial or source-only verification."
+        ],
+        "runtime": [
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "Wait verified"
+        },
+        {
+          "to": "wait-implement",
+          "route": "repair",
+          "label": "Repair Wait",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev6",
+        "wait",
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Durable Wait ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev6",
+        "wait"
+      ]
+    }
+  ]
+}

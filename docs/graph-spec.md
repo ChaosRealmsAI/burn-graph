@@ -90,13 +90,11 @@ prompt fields `role`, `lockedContracts`, `writablePaths`, `forbidden`, and
 require version 2. Version 2 adds `subgraph`, `gate`, and `wait` nodes while
 keeping the CLI response envelope at schema version 1.
 
-In `0.1.0-dev.5`, Gate and Wait are forward-compatible authoring contracts
-only. `graph validate` and `graph apply` accept their locked shapes, but
-`run start` rejects any reachable static closure containing either type with
-`SYSTEM_NODE_UNAVAILABLE` before creating a Run. Subgraph execution is fully
-available. Gate and Wait execution arrives with the package-owned System Node
-Driver in `0.1.0-dev.6`; this fail-fast boundary prevents a valid definition
-from becoming silent Ready work that no Actor can own.
+In `0.1.0-dev.6`, Gate and Wait execute through the package-owned bounded
+System Node Driver. A Gate pins an immutable CheckSpec revision registered
+with `check apply`; a Wait creates one durable opaque Signal and consumes no
+Actor slot. Mutating loop commands converge these System Nodes before returning
+AI Assignments, while all inspection and rendering commands remain inert.
 
 A static Subgraph pins one to 32 exact child Graph revisions:
 
@@ -135,6 +133,12 @@ Subgraph routes are `success`, `failure`, and `cancelled`; `success` is
 required while failure outcomes without a declared route fail the parent
 instead of being inferred. Gate requires exact `pass` and `fail` routes. Wait
 edges exactly match its declared Signal routes and optional timeout route.
+
+CheckSpec uses exact argv, a confined project-relative cwd, bounded timeout and
+output, explicit success codes, a small inherited-environment allowlist, and
+optional exclusive resources. Shell executables, parent traversal, absolute
+paths, inline environment values, and unregistered revisions are rejected.
+Use `check validate`, then `check apply`, before applying a Graph that pins it.
 
 Hierarchy is bounded to 32 children per Subgraph, eight levels, and 256
 unfinished descendants per root. Project config may lower but never raise the

@@ -1,5 +1,5 @@
 {
-  "name": "@burn-graph/core",
+  "name": "@burn-graph/system-driver",
   "version": "0.1.0-dev.6",
   "private": true,
   "type": "module",

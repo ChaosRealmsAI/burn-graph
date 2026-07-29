@@ -1,0 +1,161 @@
+import type { GraphSpec } from "@burn-graph/core";
+
+import { prompt } from "./fixtures.ts";
+
+export function gateRepairGraph(
+  graphId = "public-gate",
+  checkId = "fixture-check",
+): GraphSpec {
+  return {
+    schemaVersion: 2,
+    id: graphId,
+    title: "Public Gate repair",
+    goal: "Reject a known-bad fixture and pass only after repair.",
+    revision: 1,
+    maxActive: 2,
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        title: "Start",
+        prompt: prompt(""),
+        next: [{ to: "implement" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "implement",
+        type: "task",
+        title: "Implement",
+        prompt: prompt("Repair status.txt when evidence requires it."),
+        next: [{ to: "gate" }],
+        maxAttempts: 3,
+        actorHint: null,
+        tags: [],
+        resources: [],
+      },
+      {
+        id: "gate",
+        type: "gate",
+        title: "Verify fixture",
+        prompt: prompt(""),
+        next: [
+          { to: "end", route: "pass" },
+          { to: "review", route: "fail" },
+        ],
+        maxAttempts: 3,
+        actorHint: null,
+        tags: [],
+        check: { id: checkId, revision: 1 },
+        resources: [],
+      },
+      {
+        id: "review",
+        type: "decision",
+        title: "Review failure",
+        prompt: prompt("Route the failed evidence to repair."),
+        next: [
+          {
+            to: "implement",
+            route: "repair",
+            maxTraversals: 2,
+          },
+          { to: "end", route: "accept" },
+        ],
+        maxAttempts: 2,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "end",
+        type: "end",
+        title: "End",
+        prompt: prompt(""),
+        next: [],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+    ],
+  };
+}
+
+export function durableWaitGraph(graphId = "public-wait"): GraphSpec {
+  return {
+    schemaVersion: 2,
+    id: graphId,
+    title: "Public durable Wait",
+    goal: "Resume the same Signal after every CLI process exits.",
+    revision: 1,
+    maxActive: 3,
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        title: "Start",
+        prompt: prompt(""),
+        next: [{ to: "wait" }, { to: "unrelated" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "wait",
+        type: "wait",
+        title: "Approval",
+        prompt: prompt(""),
+        next: [
+          { to: "after", route: "approved" },
+          { to: "after", route: "rejected" },
+        ],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+        signal: { routes: ["approved", "rejected"] },
+      },
+      {
+        id: "unrelated",
+        type: "task",
+        title: "Unrelated",
+        prompt: prompt("Continue while approval waits."),
+        next: [{ to: "join" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+        resources: [],
+      },
+      {
+        id: "after",
+        type: "task",
+        title: "After approval",
+        prompt: prompt("Use the approved bounded Signal context."),
+        next: [{ to: "join" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+        resources: [],
+      },
+      {
+        id: "join",
+        type: "join",
+        title: "Join",
+        prompt: prompt(""),
+        next: [{ to: "end" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "end",
+        type: "end",
+        title: "End",
+        prompt: prompt(""),
+        next: [],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+    ],
+  };
+}
