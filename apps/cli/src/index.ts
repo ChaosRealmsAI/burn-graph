@@ -38,7 +38,7 @@ import {
   viewerInstanceStatus,
 } from "./viewer-runtime.ts";
 
-const VERSION = "0.1.0-dev.7";
+const VERSION = "0.1.0-rc.1";
 const GRAPH_STATUSES: readonly GraphStatus[] = [
   "draft",
   "running",
@@ -1774,7 +1774,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     ],
     commands: ["graph validate", "graph apply", "graph show"],
     executionAvailability: {
-      "0.1.0-dev.7":
+      "0.1.0-rc.1":
         "Subgraph, registered Gate, and durable Wait execute through the bounded System Node Driver.",
     },
   },

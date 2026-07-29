@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-rc1-template-path-fix",
+  "title": "Repair template contract references",
+  "goal": "Make template-generated prompts support the same bounded sibling contract references as hand-authored Graph prompts while keeping writable paths project-confined.",
+  "revision": 1,
+  "maxActive": 4,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start workflow",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "reproduce"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "reproduce",
+      "type": "task",
+      "title": "Reproduce defect",
+      "prompt": {
+        "objective": "Reproduce template rejection of a bounded ../privacy mustRead reference while the equivalent hand-authored Graph validates.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "packages/templates/src/index.ts",
+          "packages/core/src/contracts.ts",
+          "tests/templates/catalog.test.ts",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Reproduce defect owner",
+        "lockedContracts": [
+          "packages/core/src/contracts.ts"
+        ],
+        "writablePaths": [
+          "packages/templates",
+          "tests/templates"
+        ],
+        "forbidden": [
+          "Do not loosen writable-path confinement.",
+          "Do not allow empty, absolute, secret-bearing, or unbounded prompt references.",
+          "Do not change Graph runtime semantics."
+        ],
+        "runtime": [
+          "bun test tests/templates/catalog.test.ts",
+          "bun run check"
+        ]
+      },
+      "next": [
+        {
+          "to": "repair"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "reproduce"
+      ],
+      "resources": []
+    },
+    {
+      "id": "repair",
+      "type": "task",
+      "title": "Repair defect",
+      "prompt": {
+        "objective": "Separate readable prompt references from project-confined writable paths and preserve all existing bounds.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "packages/templates/src/index.ts",
+          "packages/core/src/contracts.ts",
+          "tests/templates/catalog.test.ts",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Repair defect owner",
+        "lockedContracts": [
+          "packages/core/src/contracts.ts"
+        ],
+        "writablePaths": [
+          "packages/templates",
+          "tests/templates"
+        ],
+        "forbidden": [
+          "Do not loosen writable-path confinement.",
+          "Do not allow empty, absolute, secret-bearing, or unbounded prompt references.",
+          "Do not change Graph runtime semantics."
+        ],
+        "runtime": [
+          "bun test tests/templates/catalog.test.ts",
+          "bun run check"
+        ]
+      },
+      "next": [
+        {
+          "to": "regression"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "repair"
+      ],
+      "resources": []
+    },
+    {
+      "id": "regression",
+      "type": "task",
+      "title": "Run regression",
+      "prompt": {
+        "objective": "Prove sibling read references generate atomically, writable traversal remains rejected, and existing template contracts still pass.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "packages/templates/src/index.ts",
+          "packages/core/src/contracts.ts",
+          "tests/templates/catalog.test.ts",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Run regression owner",
+        "lockedContracts": [
+          "packages/core/src/contracts.ts"
+        ],
+        "writablePaths": [
+          "packages/templates",
+          "tests/templates"
+        ],
+        "forbidden": [
+          "Do not loosen writable-path confinement.",
+          "Do not allow empty, absolute, secret-bearing, or unbounded prompt references.",
+          "Do not change Graph runtime semantics."
+        ],
+        "runtime": [
+          "bun test tests/templates/catalog.test.ts",
+          "bun run check"
+        ]
+      },
+      "next": [
+        {
+          "to": "review"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "regression"
+      ],
+      "resources": []
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "title": "Accept or repair",
+      "prompt": {
+        "objective": "Route pass only when read/write path semantics match architecture without weakening confinement.",
+        "instructions": [
+          "Check product behavior, contracts, architecture, tests, recovery, privacy, and performance.",
+          "Cite the exact verification result behind the route."
+        ],
+        "mustRead": [
+          "packages/templates/src/index.ts",
+          "packages/core/src/contracts.ts",
+          "tests/templates/catalog.test.ts",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "Pass has an oracle outside the implementation result.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "independent quality decision",
+        "lockedContracts": [
+          "packages/core/src/contracts.ts"
+        ],
+        "writablePaths": [
+          "packages/templates",
+          "tests/templates"
+        ],
+        "forbidden": [
+          "Do not loosen writable-path confinement.",
+          "Do not allow empty, absolute, secret-bearing, or unbounded prompt references.",
+          "Do not change Graph runtime semantics."
+        ],
+        "runtime": [
+          "bun test tests/templates/catalog.test.ts",
+          "bun run check"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "evidence accepted"
+        },
+        {
+          "to": "repair",
+          "route": "repair",
+          "label": "repair required",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Workflow complete",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

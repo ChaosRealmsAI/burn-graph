@@ -34,13 +34,41 @@ const TemplateStageSchema = z.enum([
 ]);
 
 const StringListSchema = z.array(z.string().trim().min(1).max(2_000)).max(64);
-const PathListSchema = z.array(ProjectRelativePathSchema).max(64);
+const PromptReferencePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2_000)
+  .superRefine((value, context) => {
+    const normalized = value.replaceAll("\\", "/");
+    const directSibling = normalized.startsWith("../");
+    const confined = directSibling ? normalized.slice(3) : normalized;
+    if (
+      value.includes("\0") ||
+      value.includes("\n") ||
+      value.includes("\r") ||
+      value.startsWith("/") ||
+      value.startsWith("\\") ||
+      value.startsWith("~") ||
+      /^[A-Za-z]:[\\/]/.test(value) ||
+      /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) ||
+      !ProjectRelativePathSchema.safeParse(confined).success
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "must be a bounded project or direct-sibling prompt reference",
+      });
+    }
+  });
+const PromptReferenceListSchema = z.array(PromptReferencePathSchema).max(64);
+const WritablePathListSchema = z.array(ProjectRelativePathSchema).max(64);
 
 const TemplateContextSchema = z
   .object({
-    mustRead: PathListSchema.default([]),
-    lockedContracts: PathListSchema.default([]),
-    writablePaths: PathListSchema.default([]),
+    mustRead: PromptReferenceListSchema.default([]),
+    lockedContracts: PromptReferenceListSchema.default([]),
+    writablePaths: WritablePathListSchema.default([]),
     forbidden: StringListSchema.default([]),
     runtime: StringListSchema.default([]),
   })

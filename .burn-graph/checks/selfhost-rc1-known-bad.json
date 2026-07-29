@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-rc1-known-bad",
+  "revision": 1,
+  "title": "rc.1 seeded known-bad fixture",
+  "argv": [
+    "bun",
+    "scripts/verify/rc1-dogfood-fixture.ts",
+    "verify"
+  ],
+  "cwd": ".",
+  "successExitCodes": [
+    0
+  ],
+  "timeoutMs": 5000,
+  "maxOutputBytes": 4096,
+  "inheritEnv": [
+    "PATH"
+  ],
+  "resources": [
+    "rc1-known-bad"
+  ]
+}

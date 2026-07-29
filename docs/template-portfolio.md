@@ -24,8 +24,8 @@ Create `template-input.json`:
   "goal": "Deliver the authenticated user result.",
   "include": ["security", "performance"],
   "context": {
-    "mustRead": ["README.md", "docs/cli.md"],
-    "lockedContracts": ["docs/graph-spec.md"],
+    "mustRead": ["README.md", "../privacy/product.md"],
+    "lockedContracts": ["../privacy/architecture.md"],
     "writablePaths": ["features/auth"],
     "forbidden": ["Do not change unrelated features."],
     "runtime": ["bun run check"]
@@ -44,16 +44,18 @@ burn-graph run start slice-auth --actor primary --run-id slice-auth:run
 The complete generated set validates before one file or immutable revision is
 registered. Equivalent idempotency replay returns the original receipt. A bad
 path, Check reference, override, GraphSpec, or conflicting key leaves no
-partial file or database revision.
+partial file or database revision. Read-only prompt references may address the
+project or one direct sibling contract repository; writable paths always stay
+inside the initialized project.
 
 Each supported `include` value materializes one ordered `risk-<stage>` Task
 before the optional machine Gate and review. Unsupported stages fail with
 `TEMPLATE_STAGE_NOT_SUPPORTED`; they are never accepted as inert metadata.
 
 Prompt overrides may change only `objective`, `instructions`, and `doneWhen`
-for one known injectable node. Context paths must remain project-relative.
-Templates cannot inject commands, environment values, results, or arbitrary
-Graph structure.
+for one known injectable node. Absolute and multi-parent read references are
+rejected, as is any parent traversal in `writablePaths`. Templates cannot
+inject commands, environment values, results, or arbitrary Graph structure.
 
 ## Coordinate several root trees
 

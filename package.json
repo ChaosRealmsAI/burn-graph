@@ -1,6 +1,6 @@
 {
   "name": "burn-graph",
-  "version": "0.1.0-dev.7",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.2.17",
@@ -27,9 +27,10 @@
     "viewer:stop": "bun apps/cli/src/index.ts viewer stop",
     "verify:hierarchy-performance": "bun scripts/verify/hierarchy-performance.ts",
     "verify:portfolio-performance": "bun scripts/verify/portfolio-performance.ts",
+    "verify:control-performance": "bun scripts/verify/control-performance.ts",
     "verify:render-performance": "bun scripts/verify/render-performance.ts",
     "e2e": "bun run release:pack && bun test tests/e2e",
-    "verify": "bun run check && bun run test && bun run build && bun run e2e && bun run verify:hierarchy-performance && bun run verify:portfolio-performance && bun run verify:render-performance"
+    "verify": "bun run check && bun run test && bun run build && bun run e2e && bun run verify:hierarchy-performance && bun run verify:portfolio-performance && bun run verify:control-performance && bun run verify:render-performance"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.4",

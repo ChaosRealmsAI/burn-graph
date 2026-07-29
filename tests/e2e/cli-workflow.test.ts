@@ -164,7 +164,7 @@ describe("converged public CLI", () => {
       "burn-graph done --help",
     );
     const version = await ok(root, ["--version"]);
-    expect(version.data.version).toBe("0.1.0-dev.7");
+    expect(version.data.version).toBe("0.1.0-rc.1");
 
     for (const removed of [
       ["work", "--help"],

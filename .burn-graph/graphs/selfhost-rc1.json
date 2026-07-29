@@ -1,0 +1,632 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-rc1",
+  "title": "Deliver burn-graph 0.1.0-rc.1",
+  "goal": "Dogfood the complete hierarchical control plane, replay every locked path from the isolated candidate, and form an honest release verdict.",
+  "revision": 1,
+  "maxActive": 4,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start delivery",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "plan"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "plan",
+      "type": "task",
+      "title": "Lock delivery plan",
+      "prompt": {
+        "objective": "Freeze the three child Graph revisions, exact Checks, candidate budgets, and predeclared verdict before candidate execution.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "Dogfood, quality, and release child Graph revisions exist and validate.",
+          "Known-bad, focused dogfood, and full release Checks are immutable.",
+          "No verdict threshold changed from P02."
+        ],
+        "outputSchema": null,
+        "role": "Lock delivery plan owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "vertical-slices"
+        },
+        {
+          "to": "risk-poc"
+        },
+        {
+          "to": "risk-security"
+        },
+        {
+          "to": "risk-performance"
+        },
+        {
+          "to": "risk-release"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "delivery",
+        "plan"
+      ],
+      "resources": []
+    },
+    {
+      "id": "vertical-slices",
+      "type": "subgraph",
+      "title": "Create vertical-slice Runs",
+      "prompt": {
+        "objective": "Create exactly three child Runs for recovery dogfood, independent quality, and release candidate closure.",
+        "instructions": [
+          "Prefer existing vertical-slice template instances.",
+          "Keep child count and hierarchy depth within the declared bounds."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "Every child has one complete user-visible outcome.",
+          "The complete child set validates before any Run starts."
+        ],
+        "outputSchema": null,
+        "role": "delivery slicer",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "converge",
+          "route": "success"
+        },
+        {
+          "to": "converge",
+          "route": "failure"
+        },
+        {
+          "to": "converge",
+          "route": "cancelled"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "delivery",
+        "hierarchy"
+      ],
+      "mode": "dynamic",
+      "minChildren": 1,
+      "maxChildren": 32,
+      "resources": []
+    },
+    {
+      "id": "risk-poc",
+      "type": "task",
+      "title": "poc evidence",
+      "prompt": {
+        "objective": "Compare the candidate runtime against the bounded flat baseline without inventing unknown measurements.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "poc evidence owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "converge"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "risk",
+        "poc"
+      ],
+      "resources": []
+    },
+    {
+      "id": "risk-security",
+      "type": "task",
+      "title": "security evidence",
+      "prompt": {
+        "objective": "Audit exact-process ownership, project confinement, environment filtering, privacy, and archive contents.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "security evidence owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "converge"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "risk",
+        "security"
+      ],
+      "resources": []
+    },
+    {
+      "id": "risk-performance",
+      "type": "task",
+      "title": "performance evidence",
+      "prompt": {
+        "objective": "Measure non-Gate control p95, hierarchy, portfolio, render, response bounds, package size, and installed size.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "performance evidence owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "converge"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "risk",
+        "performance"
+      ],
+      "resources": []
+    },
+    {
+      "id": "risk-release",
+      "type": "task",
+      "title": "release evidence",
+      "prompt": {
+        "objective": "Freeze rc.1 migration, rollback, archive identity, local/test environment facts, and no-Push boundary.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "release evidence owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "converge"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "risk",
+        "release"
+      ],
+      "resources": []
+    },
+    {
+      "id": "converge",
+      "type": "join",
+      "title": "Converge delivery work",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "integrate"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "integrate",
+      "type": "task",
+      "title": "Verify integrated delivery",
+      "prompt": {
+        "objective": "Replay UP01 through UP10 and BDD S01 through S08 from the exact isolated rc.1 archive, then produce bounded Evidence and the dogfood verdict.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Verify integrated delivery owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "review"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "delivery",
+        "integration"
+      ],
+      "resources": []
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "title": "Accept or repair",
+      "prompt": {
+        "objective": "Choose pass only after independent code, architecture, security, privacy, performance, package, migration, rollback, and blackbox review finds no blocker.",
+        "instructions": [
+          "Check product behavior, contracts, architecture, tests, recovery, privacy, and performance.",
+          "Cite the exact verification result behind the route."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "Pass has an oracle outside the implementation result.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "independent quality decision",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph",
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not edit SQLite or claim a named Ready node.",
+          "Do not launch an AI or subagent from burn-graph.",
+          "Do not touch existing user terminal or browser processes.",
+          "Do not Push, publish, deploy, or weaken a failed Gate."
+        ],
+        "runtime": [
+          "bun run burn-graph -- next --actor main-codex",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "evidence accepted"
+        },
+        {
+          "to": "integrate",
+          "route": "repair",
+          "label": "repair required",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Delivery complete",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

@@ -1,0 +1,464 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-rc1-dogfood",
+  "title": "Exercise rc.1 recovery controls",
+  "goal": "Prove the release candidate rejects bad evidence and recovers Wait, lease, resource, pause, and replay paths without lost or duplicate work.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start recovery dogfood",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "seed-bad"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "rc1",
+        "dogfood"
+      ]
+    },
+    {
+      "id": "seed-bad",
+      "type": "task",
+      "title": "Seed or repair the candidate fixture",
+      "prompt": {
+        "objective": "Seed the deterministic bad fixture on Attempt 1, then repair only that fixture when the Decision reopens this Task.",
+        "instructions": [
+          "On Attempt 1 run the seed-bad command; on the reopened Attempt run the repair command.",
+          "Use the Assignment Attempt and predecessor Decision route instead of hidden state to choose the action.",
+          "Do not alter the Check revision or acceptance rule after observing the result."
+        ],
+        "mustRead": [
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "scripts/verify/rc1-dogfood-fixture.ts"
+        ],
+        "doneWhen": [
+          "Attempt 1 records bad state and the reopened Attempt records repaired state.",
+          "The registered Check remains immutable."
+        ],
+        "outputSchema": null,
+        "role": "known-bad control owner",
+        "lockedContracts": [
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [
+          ".burn-graph/runtime/artifacts"
+        ],
+        "forbidden": [
+          "Do not weaken or replace the Check.",
+          "Do not write raw output into committed Evidence."
+        ],
+        "runtime": [
+          "bun scripts/verify/rc1-dogfood-fixture.ts seed-bad",
+          "bun scripts/verify/rc1-dogfood-fixture.ts repair"
+        ]
+      },
+      "next": [
+        {
+          "to": "fixture-gate"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "rc1",
+        "known-bad"
+      ],
+      "resources": []
+    },
+    {
+      "id": "fixture-gate",
+      "type": "gate",
+      "title": "Reject or accept fixture",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "fixture-decision",
+          "route": "pass"
+        },
+        {
+          "to": "fixture-decision",
+          "route": "fail"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "rc1",
+        "gate"
+      ],
+      "check": {
+        "id": "selfhost-rc1-known-bad",
+        "revision": 1
+      },
+      "resources": []
+    },
+    {
+      "id": "fixture-decision",
+      "type": "decision",
+      "title": "Accept rejection or require repair",
+      "prompt": {
+        "objective": "Route repair after the seeded failure and route pass only after the same pinned Check accepts the repaired fixture.",
+        "instructions": [
+          "Inspect bounded execution classifications, never private Check output.",
+          "A pass on the initial bad fixture is an immediate harmful verdict."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "doneWhen": [
+          "The first Gate classification is non_success.",
+          "Pass is selected only after a later success from Check revision 1."
+        ],
+        "outputSchema": null,
+        "role": "known-bad quality decision",
+        "lockedContracts": [
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not route pass after a non-success Gate."
+        ],
+        "runtime": [
+          "burn-graph inspect executions selfhost-rc1-dogfood-r1"
+        ]
+      },
+      "next": [
+        {
+          "to": "durable-wait",
+          "route": "pass"
+        },
+        {
+          "to": "seed-bad",
+          "route": "repair",
+          "maxTraversals": 1
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "rc1",
+        "decision"
+      ]
+    },
+    {
+      "id": "durable-wait",
+      "type": "wait",
+      "title": "Wait across CLI restart",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "lease-recovery",
+          "route": "approved"
+        },
+        {
+          "to": "dogfood-review",
+          "route": "rejected"
+        },
+        {
+          "to": "dogfood-review",
+          "route": "timeout"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "rc1",
+        "wait"
+      ],
+      "signal": {
+        "routes": [
+          "approved",
+          "rejected"
+        ],
+        "timeout": {
+          "afterMs": 3600000,
+          "route": "timeout"
+        }
+      }
+    },
+    {
+      "id": "lease-recovery",
+      "type": "task",
+      "title": "Recover one expired Assignment",
+      "prompt": {
+        "objective": "Let the first Assignment lease expire, reconcile it, and complete only the recovered Attempt.",
+        "instructions": [
+          "Do not complete the first Assignment handle.",
+          "Use public reconciliation and verify the stale handle cannot mutate state."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "docs/cli.md"
+        ],
+        "doneWhen": [
+          "Attempt 1 is recorded expired.",
+          "Attempt 2 has a distinct Assignment ID and completes once.",
+          "Exactly one lease recovery is reported."
+        ],
+        "outputSchema": null,
+        "role": "lease recovery operator",
+        "lockedContracts": [
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not claim a named Ready node.",
+          "Do not edit SQLite."
+        ],
+        "runtime": [
+          "burn-graph recover reconcile selfhost-rc1-dogfood-r1 --actor dogfood-codex"
+        ]
+      },
+      "next": [
+        {
+          "to": "exclusive-a"
+        },
+        {
+          "to": "exclusive-b"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "dogfood-codex",
+      "tags": [
+        "rc1",
+        "lease"
+      ],
+      "resources": [
+        "rc1-lease"
+      ]
+    },
+    {
+      "id": "exclusive-a",
+      "type": "task",
+      "title": "Hold exclusive resource A",
+      "prompt": {
+        "objective": "Complete the first independently useful result while holding the shared dogfood resource.",
+        "instructions": [
+          "Inspect resource ownership before completion."
+        ],
+        "mustRead": [
+          "docs/template-portfolio.md"
+        ],
+        "doneWhen": [
+          "Only one of the two exclusive Tasks owns the resource.",
+          "The other Task remains eligible without a duplicate Assignment."
+        ],
+        "outputSchema": null,
+        "role": "resource branch A",
+        "lockedContracts": [
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not manually unlock the resource."
+        ],
+        "runtime": [
+          "burn-graph inspect resources selfhost-rc1-dogfood-r1"
+        ]
+      },
+      "next": [
+        {
+          "to": "resource-join"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": "dogfood-codex",
+      "tags": [
+        "rc1",
+        "resource"
+      ],
+      "resources": [
+        "rc1-exclusive"
+      ]
+    },
+    {
+      "id": "exclusive-b",
+      "type": "task",
+      "title": "Hold exclusive resource B",
+      "prompt": {
+        "objective": "Complete the second independently useful result after the shared dogfood resource transfers.",
+        "instructions": [
+          "Verify the resource was automatically released and transferred."
+        ],
+        "mustRead": [
+          "docs/template-portfolio.md"
+        ],
+        "doneWhen": [
+          "The second Task receives a distinct Assignment only after resource release.",
+          "No stale resource remains."
+        ],
+        "outputSchema": null,
+        "role": "resource branch B",
+        "lockedContracts": [
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not manually unlock the resource."
+        ],
+        "runtime": [
+          "burn-graph inspect resources selfhost-rc1-dogfood-r1"
+        ]
+      },
+      "next": [
+        {
+          "to": "resource-join"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": "dogfood-codex",
+      "tags": [
+        "rc1",
+        "resource"
+      ],
+      "resources": [
+        "rc1-exclusive"
+      ]
+    },
+    {
+      "id": "resource-join",
+      "type": "join",
+      "title": "Converge resource branches",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "dogfood-review"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "rc1",
+        "resource"
+      ]
+    },
+    {
+      "id": "dogfood-review",
+      "type": "decision",
+      "title": "Accept or repair recovery dogfood",
+      "prompt": {
+        "objective": "Route pass only when bad evidence was rejected, Wait survived restart, the lease recovered once, and resources transferred without loss or duplication.",
+        "instructions": [
+          "Use public events, metrics, executions, waits, and resource snapshots.",
+          "Choose repair for any escaped bad result, duplicate work, missing successor, stale lock, or private output."
+        ],
+        "mustRead": [
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "doneWhen": [
+          "Every required recovery event is durable and singular.",
+          "No active Signal, Assignment, Gate execution, or resource remains.",
+          "The result satisfies the predeclared verdict inputs."
+        ],
+        "outputSchema": null,
+        "role": "recovery dogfood decision",
+        "lockedContracts": [
+          "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
+        ],
+        "writablePaths": [],
+        "forbidden": [
+          "Do not force a favorable verdict."
+        ],
+        "runtime": [
+          "burn-graph inspect metrics selfhost-rc1-dogfood-r1"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass"
+        },
+        {
+          "to": "seed-bad",
+          "route": "repair",
+          "maxTraversals": 1
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "rc1",
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Recovery dogfood complete",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "rc1",
+        "dogfood"
+      ]
+    }
+  ]
+}

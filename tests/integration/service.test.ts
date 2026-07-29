@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   BurnGraphError,
   BurnGraphService,
+  type GraphSpec,
   type GraphSnapshot,
 } from "@burn-graph/core";
 
@@ -10,6 +11,7 @@ import {
   createTestProject,
   loopGraph,
   parallelGraph,
+  prompt,
   removeTestProject,
   schemaGraph,
   wideGraph,
@@ -33,6 +35,145 @@ function complete(
     evidence: [`evidence:${nodeId}`],
     ...extra,
   }).value;
+}
+
+function upstreamBranchLoopGraph(): GraphSpec {
+  return {
+    schemaVersion: 1,
+    id: "upstream-branch-loop",
+    title: "Upstream branch repair",
+    goal: "Reopen a skipped success branch after one bounded repair.",
+    revision: 1,
+    maxActive: 1,
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        title: "Start",
+        prompt: prompt(""),
+        next: [{ to: "work" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "work",
+        type: "task",
+        title: "Work",
+        prompt: prompt("Produce the candidate result."),
+        next: [{ to: "classify" }],
+        maxAttempts: 2,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "classify",
+        type: "decision",
+        title: "Classify",
+        prompt: prompt("Choose pass or fail."),
+        next: [
+          { to: "success", route: "pass" },
+          { to: "review", route: "fail" },
+        ],
+        maxAttempts: 2,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "review",
+        type: "decision",
+        title: "Review",
+        prompt: prompt("Repair the failed classification."),
+        next: [
+          {
+            to: "work",
+            route: "repair",
+            maxTraversals: 1,
+          },
+          { to: "end", route: "abort" },
+        ],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "success",
+        type: "task",
+        title: "Success",
+        prompt: prompt("Continue through the restored success branch."),
+        next: [{ to: "end" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "end",
+        type: "end",
+        title: "End",
+        prompt: prompt(""),
+        next: [],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+    ],
+  };
+}
+
+function convergingRoutesGraph(): GraphSpec {
+  return {
+    schemaVersion: 1,
+    id: "converging-routes",
+    title: "Converging routes",
+    goal: "Expose one predecessor when several routes share a successor.",
+    revision: 1,
+    maxActive: 1,
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        title: "Start",
+        prompt: prompt(""),
+        next: [{ to: "decision" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "decision",
+        type: "decision",
+        title: "Decision",
+        prompt: prompt("Choose one route."),
+        next: [
+          { to: "after", route: "pass" },
+          { to: "after", route: "fail" },
+        ],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "after",
+        type: "task",
+        title: "After",
+        prompt: prompt("Read the direct predecessor once."),
+        next: [{ to: "end" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "end",
+        type: "end",
+        title: "End",
+        prompt: prompt(""),
+        next: [],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+    ],
+  };
 }
 
 describe("runtime convergence", () => {
@@ -133,6 +274,127 @@ describe("runtime convergence", () => {
         { node_id: "decide", attempt: 2, status: "done", route: "pass" },
         { node_id: "work", attempt: 1, status: "done", route: null },
         { node_id: "work", attempt: 2, status: "done", route: null },
+      ]);
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("reopens a success branch skipped before an upstream repair loop", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(upstreamBranchLoopGraph());
+      service.startRun("upstream-branch-loop", "upstream-branch-loop:run");
+      service.claim("upstream-branch-loop:run", "work", "worker", 60);
+      complete(
+        service,
+        "upstream-branch-loop:run",
+        "work",
+        "worker",
+      );
+      service.claim(
+        "upstream-branch-loop:run",
+        "classify",
+        "reviewer",
+        60,
+      );
+      let snapshot = complete(
+        service,
+        "upstream-branch-loop:run",
+        "classify",
+        "reviewer",
+        { route: "fail" },
+      );
+      expect(status(snapshot, "success")).toBe("skipped");
+
+      service.claim(
+        "upstream-branch-loop:run",
+        "review",
+        "reviewer",
+        60,
+      );
+      snapshot = complete(
+        service,
+        "upstream-branch-loop:run",
+        "review",
+        "reviewer",
+        { route: "repair" },
+      );
+      expect(status(snapshot, "work")).toBe("ready");
+      expect(status(snapshot, "success")).toBe("pending");
+
+      service.claim("upstream-branch-loop:run", "work", "worker", 60);
+      complete(
+        service,
+        "upstream-branch-loop:run",
+        "work",
+        "worker",
+      );
+      service.claim(
+        "upstream-branch-loop:run",
+        "classify",
+        "reviewer",
+        60,
+      );
+      snapshot = complete(
+        service,
+        "upstream-branch-loop:run",
+        "classify",
+        "reviewer",
+        { route: "pass" },
+      );
+      expect(status(snapshot, "success")).toBe("ready");
+      service.claim(
+        "upstream-branch-loop:run",
+        "success",
+        "worker",
+        60,
+      );
+      snapshot = complete(
+        service,
+        "upstream-branch-loop:run",
+        "success",
+        "worker",
+      );
+      expect(snapshot.summary.status).toBe("completed");
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("reports a direct predecessor once when several routes converge", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(convergingRoutesGraph());
+      service.startRun("converging-routes", "converging-routes:run");
+      service.claim(
+        "converging-routes:run",
+        "decision",
+        "reviewer",
+        60,
+      );
+      complete(
+        service,
+        "converging-routes:run",
+        "decision",
+        "reviewer",
+        { route: "pass" },
+      );
+      const successor = service.claim(
+        "converging-routes:run",
+        "after",
+        "worker",
+        60,
+      ).value;
+      expect(successor.context.predecessors).toEqual([
+        expect.objectContaining({
+          nodeId: "decision",
+          route: "pass",
+        }),
       ]);
     } finally {
       service.close();

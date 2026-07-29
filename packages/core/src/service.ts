@@ -4496,7 +4496,25 @@ export class BurnGraphServiceBase {
     changes: Array<Record<string, unknown>>,
   ): void {
     const body = loopBodyNodeIds(graph, sourceId, targetId);
-    const placeholders = [...body].map(() => "?").join(", ");
+    const reachableFromBody = new Set(body);
+    const queue = [...body];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const edge of graph.forwardEdges) {
+        if (edge.from !== current || reachableFromBody.has(edge.to)) continue;
+        reachableFromBody.add(edge.to);
+        queue.push(edge.to);
+      }
+    }
+    const resetNodes = new Set(body);
+    for (const nodeId of reachableFromBody) {
+      if (
+        stringValue(this.nodeRow(runId, nodeId), "status") === "skipped"
+      ) {
+        resetNodes.add(nodeId);
+      }
+    }
+    const placeholders = [...resetNodes].map(() => "?").join(", ");
     this.database.db
       .query(
         `UPDATE node_runs
@@ -4506,14 +4524,14 @@ export class BurnGraphServiceBase {
                 updated_at = ?
           WHERE run_id = ? AND node_id IN (${placeholders})`,
       )
-      .run(at, runId, ...body);
+      .run(at, runId, ...resetNodes);
     this.database.db
       .query(
         `UPDATE edge_runs
             SET status = 'pending', updated_at = ?
           WHERE run_id = ? AND from_node_id IN (${placeholders})`,
       )
-      .run(at, runId, ...body);
+      .run(at, runId, ...resetNodes);
     this.database.db
       .query(
         `UPDATE edge_runs
@@ -4530,7 +4548,7 @@ export class BurnGraphServiceBase {
       .run(at, runId, targetId);
     changes.push({
       loop: `${sourceId}->${targetId}`,
-      resetNodes: [...body],
+      resetNodes: [...resetNodes],
       ready: targetId,
     });
   }
@@ -4947,9 +4965,13 @@ export class BurnGraphServiceBase {
           ORDER BY edge_id`,
       )
       .all(runId, nodeId) as Row[];
-    const predecessors = incoming
-      .map((edge) => {
-        const predecessorId = stringValue(edge, "from_node_id");
+    const predecessorIds = [
+      ...new Set(
+        incoming.map((edge) => stringValue(edge, "from_node_id")),
+      ),
+    ];
+    const predecessors = predecessorIds
+      .map((predecessorId) => {
         const runtime = this.runtimeNode(
           this.nodeRow(runId, predecessorId),
         );

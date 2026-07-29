@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-rc1-release-candidate",
+  "revision": 1,
+  "title": "rc.1 full source and isolated-package release gate",
+  "argv": [
+    "bun",
+    "run",
+    "verify"
+  ],
+  "cwd": ".",
+  "successExitCodes": [
+    0
+  ],
+  "timeoutMs": 900000,
+  "maxOutputBytes": 65536,
+  "inheritEnv": [
+    "PATH"
+  ],
+  "resources": [
+    "rc1-full-verify"
+  ]
+}

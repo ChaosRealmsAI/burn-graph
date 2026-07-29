@@ -1,0 +1,403 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-rc1-release",
+  "title": "Close burn-graph 0.1.0-rc.1",
+  "goal": "Freeze, build, install, migrate, blackbox, and verify one lightweight rc.1 archive without publishing it.",
+  "revision": 1,
+  "maxActive": 4,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start workflow",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "scope"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "scope",
+      "type": "task",
+      "title": "Freeze release scope",
+      "prompt": {
+        "objective": "Freeze rc.1 version, archive name, migration matrix, rollback, budgets, environments, and no-publication boundary.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/slices/S15-release-candidate/slice.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "AGENTS.md",
+          "docs/install.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Freeze release scope owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not Push, publish, or deploy.",
+          "Do not rebuild a different artifact between package and final evidence.",
+          "Do not package Product Private or ignored runtime data."
+        ],
+        "runtime": [
+          "bun run release:pack",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "regression"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "scope"
+      ],
+      "resources": []
+    },
+    {
+      "id": "regression",
+      "type": "task",
+      "title": "Run release regression",
+      "prompt": {
+        "objective": "Replay all locked User Paths and BDD from source and the isolated candidate with known-bad controls.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/slices/S15-release-candidate/slice.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "AGENTS.md",
+          "docs/install.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Run release regression owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not Push, publish, or deploy.",
+          "Do not rebuild a different artifact between package and final evidence.",
+          "Do not package Product Private or ignored runtime data."
+        ],
+        "runtime": [
+          "bun run release:pack",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "package"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "regression"
+      ],
+      "resources": []
+    },
+    {
+      "id": "package",
+      "type": "task",
+      "title": "Build immutable artifact",
+      "prompt": {
+        "objective": "Build one zero-dependency archive, audit its contents and permissions, and record size and SHA-256.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/slices/S15-release-candidate/slice.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "AGENTS.md",
+          "docs/install.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Build immutable artifact owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not Push, publish, or deploy.",
+          "Do not rebuild a different artifact between package and final evidence.",
+          "Do not package Product Private or ignored runtime data."
+        ],
+        "runtime": [
+          "bun run release:pack",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "risk-performance"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "package"
+      ],
+      "resources": []
+    },
+    {
+      "id": "risk-performance",
+      "type": "task",
+      "title": "performance evidence",
+      "prompt": {
+        "objective": "Measure hierarchy, portfolio, render, non-Gate control, response, archive, and installed-size budgets.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/slices/S15-release-candidate/slice.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "AGENTS.md",
+          "docs/install.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "performance evidence owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not Push, publish, or deploy.",
+          "Do not rebuild a different artifact between package and final evidence.",
+          "Do not package Product Private or ignored runtime data."
+        ],
+        "runtime": [
+          "bun run release:pack",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "machine-gate"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "risk",
+        "performance"
+      ],
+      "resources": []
+    },
+    {
+      "id": "machine-gate",
+      "type": "gate",
+      "title": "Run registered verification",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "review",
+          "route": "pass",
+          "label": "check passed"
+        },
+        {
+          "to": "review",
+          "route": "fail",
+          "label": "check failed"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": null,
+      "tags": [
+        "gate"
+      ],
+      "check": {
+        "id": "selfhost-rc1-release-candidate",
+        "revision": 1
+      },
+      "resources": []
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "title": "Accept or repair",
+      "prompt": {
+        "objective": "Route pass only when the exact full release Gate succeeds and migration, rollback, privacy, and local installation evidence are complete.",
+        "instructions": [
+          "Check product behavior, contracts, architecture, tests, recovery, privacy, and performance.",
+          "Cite the exact verification result behind the route."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M08-hierarchical-rc.md",
+          "../privacy/slices/S15-release-candidate/slice.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "../privacy/user-paths/UP10-evaluate-dogfood.md",
+          "AGENTS.md",
+          "docs/install.md"
+        ],
+        "doneWhen": [
+          "Pass has an oracle outside the implementation result.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "independent quality decision",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs",
+          "README.md",
+          "package.json",
+          "bun.lock"
+        ],
+        "forbidden": [
+          "Do not Push, publish, or deploy.",
+          "Do not rebuild a different artifact between package and final evidence.",
+          "Do not package Product Private or ignored runtime data."
+        ],
+        "runtime": [
+          "bun run release:pack",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "evidence accepted"
+        },
+        {
+          "to": "regression",
+          "route": "repair",
+          "label": "repair required",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Workflow complete",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

@@ -279,7 +279,7 @@ describe("template portfolio public path", () => {
 
     const invalidInput = writeJson(root, "invalid-input.json", {
       ...templateInput("template-invalid", "template-invalid-key"),
-      context: { mustRead: ["../private.md"] },
+      context: { writablePaths: ["../private"] },
     });
     await fail(root, [
       "template",

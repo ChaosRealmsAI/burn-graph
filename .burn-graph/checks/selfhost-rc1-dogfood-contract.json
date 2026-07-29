@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-rc1-dogfood-contract",
+  "revision": 1,
+  "title": "rc.1 installed hierarchical dogfood contract",
+  "argv": [
+    "bun",
+    "test",
+    "tests/e2e/rc1-dogfood-workflow.test.ts"
+  ],
+  "cwd": ".",
+  "successExitCodes": [
+    0
+  ],
+  "timeoutMs": 120000,
+  "maxOutputBytes": 65536,
+  "inheritEnv": [
+    "PATH"
+  ],
+  "resources": [
+    "rc1-dogfood-contract"
+  ]
+}

@@ -1,0 +1,440 @@
+{
+  "schemaVersion": 2,
+  "id": "selfhost-rc1-quality",
+  "title": "Review and repair rc.1",
+  "goal": "Independently attack the candidate's hierarchical dogfood, safety, privacy, performance, and package evidence before acceptance.",
+  "revision": 1,
+  "maxActive": 4,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start workflow",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "inspect"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "inspect",
+      "type": "task",
+      "title": "Inspect findings",
+      "prompt": {
+        "objective": "Perform an evidence-backed read-only review of the candidate and classify every finding before changing code.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Inspect findings owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not implement while performing the independent inspect stage.",
+          "Do not weaken a known-bad, recovery, or package Oracle.",
+          "Do not inspect or stop unrelated processes."
+        ],
+        "runtime": [
+          "bun test tests/e2e/rc1-dogfood-workflow.test.ts",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "repair"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "inspect"
+      ],
+      "resources": []
+    },
+    {
+      "id": "repair",
+      "type": "task",
+      "title": "Repair accepted findings",
+      "prompt": {
+        "objective": "Repair only confirmed rc.1 blockers in their owning modules and add a known-red regression.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Repair accepted findings owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not implement while performing the independent inspect stage.",
+          "Do not weaken a known-bad, recovery, or package Oracle.",
+          "Do not inspect or stop unrelated processes."
+        ],
+        "runtime": [
+          "bun test tests/e2e/rc1-dogfood-workflow.test.ts",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "verify"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "repair"
+      ],
+      "resources": []
+    },
+    {
+      "id": "verify",
+      "type": "task",
+      "title": "Verify repairs",
+      "prompt": {
+        "objective": "Prove every accepted finding is absent through public source and isolated-package paths.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "Verify repairs owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not implement while performing the independent inspect stage.",
+          "Do not weaken a known-bad, recovery, or package Oracle.",
+          "Do not inspect or stop unrelated processes."
+        ],
+        "runtime": [
+          "bun test tests/e2e/rc1-dogfood-workflow.test.ts",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "risk-security"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "verify"
+      ],
+      "resources": []
+    },
+    {
+      "id": "risk-security",
+      "type": "task",
+      "title": "security evidence",
+      "prompt": {
+        "objective": "Resolve the declared security risk with a bounded independent result.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "security evidence owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not implement while performing the independent inspect stage.",
+          "Do not weaken a known-bad, recovery, or package Oracle.",
+          "Do not inspect or stop unrelated processes."
+        ],
+        "runtime": [
+          "bun test tests/e2e/rc1-dogfood-workflow.test.ts",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "risk-performance"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "risk",
+        "security"
+      ],
+      "resources": []
+    },
+    {
+      "id": "risk-performance",
+      "type": "task",
+      "title": "performance evidence",
+      "prompt": {
+        "objective": "Resolve the declared performance risk with a bounded independent result.",
+        "instructions": [
+          "Read every declared context path before acting.",
+          "Return bounded evidence from the public product boundary."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The stated outcome is observable.",
+          "Applicable declared runtime checks pass."
+        ],
+        "outputSchema": null,
+        "role": "performance evidence owner",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not implement while performing the independent inspect stage.",
+          "Do not weaken a known-bad, recovery, or package Oracle.",
+          "Do not inspect or stop unrelated processes."
+        ],
+        "runtime": [
+          "bun test tests/e2e/rc1-dogfood-workflow.test.ts",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "machine-gate"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "risk",
+        "performance"
+      ],
+      "resources": []
+    },
+    {
+      "id": "machine-gate",
+      "type": "gate",
+      "title": "Run registered verification",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [
+        {
+          "to": "review",
+          "route": "pass",
+          "label": "check passed"
+        },
+        {
+          "to": "review",
+          "route": "fail",
+          "label": "check failed"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": null,
+      "tags": [
+        "gate"
+      ],
+      "check": {
+        "id": "selfhost-rc1-dogfood-contract",
+        "revision": 1
+      },
+      "resources": []
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "title": "Accept or repair",
+      "prompt": {
+        "objective": "Route pass only when the focused installed dogfood Gate passes and no blocker or unaccepted debt remains.",
+        "instructions": [
+          "Check product behavior, contracts, architecture, tests, recovery, privacy, and performance.",
+          "Cite the exact verification result behind the route."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature",
+          "../privacy/slices/S14-hierarchical-dogfood/versions/0.1.0-rc.1/plan.md",
+          "../privacy/slices/S15-release-candidate/versions/0.1.0-rc.1/plan.md",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "Pass has an oracle outside the implementation result.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null,
+        "role": "independent quality decision",
+        "lockedContracts": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S08-dogfood-evaluation.feature"
+        ],
+        "writablePaths": [
+          "apps",
+          "packages",
+          "scripts",
+          "tests",
+          "docs"
+        ],
+        "forbidden": [
+          "Do not implement while performing the independent inspect stage.",
+          "Do not weaken a known-bad, recovery, or package Oracle.",
+          "Do not inspect or stop unrelated processes."
+        ],
+        "runtime": [
+          "bun test tests/e2e/rc1-dogfood-workflow.test.ts",
+          "bun run verify"
+        ]
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "evidence accepted"
+        },
+        {
+          "to": "repair",
+          "route": "repair",
+          "label": "repair required",
+          "maxTraversals": 2
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Workflow complete",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null,
+        "role": "",
+        "lockedContracts": [],
+        "writablePaths": [],
+        "forbidden": [],
+        "runtime": []
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

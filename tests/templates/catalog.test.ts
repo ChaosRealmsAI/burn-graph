@@ -109,7 +109,7 @@ describe("package template catalog", () => {
     }
   });
 
-  test("bounds prompt overrides and confined context paths", () => {
+  test("bounds prompt overrides and separates read from write paths", () => {
     try {
       generateTemplate(
         "poc",
@@ -138,18 +138,59 @@ describe("package template catalog", () => {
         "bad-override",
       ),
     ).toThrow(BurnGraphError);
-    expect(() =>
-      generateTemplate(
-        "bugfix",
-        {
-          ...input("bad-path"),
-          context: {
-            mustRead: ["../private.md"],
-          },
+    const siblingContracts = generateTemplate(
+      "bugfix",
+      {
+        ...input("sibling-contracts"),
+        context: {
+          ...(input("sibling-contracts").context as Record<string, unknown>),
+          mustRead: ["../privacy/product.md"],
+          lockedContracts: ["../privacy/architecture.md"],
         },
-        "bad-path",
-      ),
-    ).toThrow();
+      },
+      "sibling-contracts",
+    );
+    expect(siblingContracts.graphs[0]!.nodes[1]!.prompt).toMatchObject({
+      mustRead: ["../privacy/product.md"],
+      lockedContracts: ["../privacy/architecture.md"],
+    });
+    for (const context of [
+      {
+        ...(input("bad-write-path").context as Record<string, unknown>),
+        writablePaths: ["../privacy"],
+      },
+      {
+        ...(input("bad-deep-read").context as Record<string, unknown>),
+        mustRead: ["../../secrets.txt"],
+      },
+      {
+        ...(input("bad-absolute-read").context as Record<string, unknown>),
+        mustRead: ["/tmp/private.txt"],
+      },
+      {
+        ...(input("bad-uri-read").context as Record<string, unknown>),
+        mustRead: ["https://example.test/contract"],
+      },
+      {
+        ...(input("bad-empty-sibling").context as Record<string, unknown>),
+        mustRead: ["../"],
+      },
+      {
+        ...(input("bad-control-read").context as Record<string, unknown>),
+        mustRead: ["docs/\nsecret.md"],
+      },
+    ]) {
+      expect(() =>
+        generateTemplate(
+          "bugfix",
+          {
+            ...input("bad-path"),
+            context,
+          },
+          "bad-path",
+        ),
+      ).toThrow();
+    }
     expect(() => showTemplate("unknown")).toThrow(BurnGraphError);
   });
 

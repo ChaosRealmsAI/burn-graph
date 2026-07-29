@@ -33,7 +33,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.7.tgz",
+  "burn-graph-0.1.0-rc.1.tgz",
 );
 const roots: string[] = [];
 
@@ -227,7 +227,7 @@ describe("lightweight Bun package", () => {
       schemaVersion: 1,
       ok: true,
       command: "version",
-      data: { version: "0.1.0-dev.7" },
+      data: { version: "0.1.0-rc.1" },
     });
 
     const installedPackage = path.join(
@@ -441,6 +441,47 @@ describe("lightweight Bun package", () => {
         .filter((node: any) => node.id.startsWith("risk-"))
         .map((node: any) => node.id),
     ).toEqual(["risk-security", "risk-performance"]);
+    const siblingContractInput = path.join(
+      projectRoot,
+      "installed-sibling-contract-input.json",
+    );
+    writeFileSync(
+      siblingContractInput,
+      `${JSON.stringify({
+        ...installedTemplateInput(
+          "installed-template-sibling-contract",
+          "installed-template-sibling-contract-key",
+        ),
+        context: {
+          mustRead: ["../privacy/product.md"],
+          lockedContracts: ["../privacy/architecture.md"],
+          writablePaths: ["src"],
+          forbidden: ["Do not change unrelated files."],
+          runtime: ["burn-graph inspect metrics"],
+        },
+      })}\n`,
+    );
+    const siblingReceipt = await installedCli(executable, projectRoot, [
+      "template",
+      "instantiate",
+      "poc",
+      "--input",
+      siblingContractInput,
+    ]);
+    const siblingGraph = JSON.parse(
+      readFileSync(
+        path.resolve(projectRoot, siblingReceipt.data.graphs[0].path),
+        "utf8",
+      ),
+    );
+    expect(
+      siblingGraph.nodes.some(
+        (node: any) =>
+          node.prompt.mustRead.includes("../privacy/product.md") &&
+          node.prompt.lockedContracts.includes("../privacy/architecture.md") &&
+          node.prompt.writablePaths.includes("src"),
+      ),
+    ).toBe(true);
     const invalidTemplateInput = path.join(
       projectRoot,
       "installed-invalid-template.json",
@@ -452,7 +493,7 @@ describe("lightweight Bun package", () => {
           "installed-template-invalid",
           "installed-template-invalid-key",
         ),
-        context: { mustRead: ["../private.md"] },
+        context: { writablePaths: ["../private"] },
       })}\n`,
     );
     const rejectedTemplate = await command(
