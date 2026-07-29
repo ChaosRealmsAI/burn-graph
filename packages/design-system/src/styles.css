@@ -174,8 +174,13 @@ a:focus-visible {
   color: var(--state-ready);
 }
 
-.bg-status--running {
+.bg-status--running,
+.bg-status--pausing {
   color: var(--state-running);
+}
+
+.bg-status--waiting {
+  color: var(--accent-secondary);
 }
 
 .bg-status--done,
@@ -184,6 +189,7 @@ a:focus-visible {
 }
 
 .bg-status--blocked,
+.bg-status--cancelling,
 .bg-status--cancelled {
   color: var(--state-blocked);
 }
@@ -303,6 +309,24 @@ a:focus-visible {
   font-size: var(--text-xs);
 }
 
+.bg-graph-card__identity {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.bg-hierarchy-badge {
+  padding: 0.18rem 0.45rem;
+  border: 1px solid rgba(169, 132, 255, 0.4);
+  border-radius: var(--radius-pill);
+  color: var(--accent-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
 .bg-graph-card > strong {
   margin-top: var(--space-2);
   font-size: var(--text-lg);
@@ -329,6 +353,21 @@ a:focus-visible {
   border-radius: 50%;
   background: var(--state-running);
   box-shadow: 0 0 12px rgba(245, 184, 75, 0.55);
+}
+
+.bg-graph-card__tree {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.bg-graph-card__tree span {
+  padding: 0.28rem 0.48rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas-soft);
 }
 
 .bg-progress {
@@ -446,6 +485,21 @@ a:focus-visible {
   background: var(--bg-surface);
 }
 
+.bg-projection-toggle {
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--accent-wash);
+  color: var(--state-ready);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bg-projection-toggle:hover {
+  border-color: var(--state-ready);
+}
+
 .bg-diagram-header > div:first-child,
 .bg-node-list > header,
 .bg-timeline > header {
@@ -499,10 +553,128 @@ a:focus-visible {
 
 .bg-node-detail,
 .bg-timeline,
-.bg-node-list {
+.bg-node-list,
+.bg-child-runs,
+.bg-metrics {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl);
   background: var(--bg-surface);
+}
+
+.bg-child-runs {
+  overflow: hidden;
+}
+
+.bg-child-runs > header,
+.bg-metrics > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.bg-child-runs > header > div,
+.bg-metrics > header {
+  align-items: flex-start;
+}
+
+.bg-child-runs > header > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.bg-child-runs > header code {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.bg-child-runs > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.bg-child-runs button {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  text-align: left;
+}
+
+.bg-child-runs button:not(:disabled) {
+  cursor: pointer;
+}
+
+.bg-child-runs button:not(:disabled):hover {
+  background: var(--bg-surface-hover);
+}
+
+.bg-child-runs button > span {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.bg-child-runs button > span:last-child {
+  justify-items: end;
+}
+
+.bg-child-runs small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+}
+
+.bg-metrics {
+  overflow: hidden;
+}
+
+.bg-metrics > header {
+  flex-direction: column;
+}
+
+.bg-metrics dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-4);
+}
+
+.bg-metrics dl div {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas-soft);
+}
+
+.bg-metrics dt {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.bg-metrics dd {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+}
+
+.bg-metrics .is-good dd {
+  color: var(--state-done);
+}
+
+.bg-metrics .is-warning dd {
+  color: var(--state-running);
 }
 
 .bg-node-detail {
@@ -606,6 +778,13 @@ a:focus-visible {
   background: var(--success-wash);
 }
 
+.bg-system-detail {
+  padding: var(--space-4);
+  border: 1px solid rgba(169, 132, 255, 0.32);
+  border-radius: var(--radius-md);
+  background: rgba(169, 132, 255, 0.08);
+}
+
 .bg-empty-detail {
   min-height: 250px;
   align-content: center;
@@ -668,6 +847,11 @@ a:focus-visible {
 
 .bg-node-list button i.is-running {
   background: var(--state-running);
+}
+
+.bg-node-list button i.is-waiting {
+  background: var(--accent-secondary);
+  box-shadow: 0 0 0 4px rgba(169, 132, 255, 0.12);
 }
 
 .bg-node-list button i.is-done {
@@ -764,7 +948,8 @@ a:focus-visible {
 
   .bg-graph-grid,
   .bg-detail__rail,
-  .bg-node-list > div {
+  .bg-node-list > div,
+  .bg-child-runs > div {
     grid-template-columns: 1fr;
   }
 

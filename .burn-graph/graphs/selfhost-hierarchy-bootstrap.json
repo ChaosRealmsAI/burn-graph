@@ -1,0 +1,314 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-hierarchy-bootstrap",
+  "title": "Lock hierarchical burn-graph delivery contracts",
+  "goal": "Use the current guarded CLI to lock the parent-child graph, machine Gate, Wait, template, control-plane, and dogfood contracts before runtime implementation.",
+  "revision": 1,
+  "maxActive": 3,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start hierarchy contract bootstrap",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "product-scope"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "product-scope",
+      "type": "task",
+      "title": "Define hierarchy product paths",
+      "prompt": {
+        "objective": "Revise the formal product promise and draft complete user paths for hierarchical execution, machine Gate, durable Wait, templates, and measurable dogfood.",
+        "instructions": [
+          "Role: product contract owner for this bounded node; the main Codex remains project owner.",
+          "Keep burn-graph provider-neutral: the calling AI executes prompts and burn-graph executes only registered machine checks.",
+          "Describe static and dynamic child graphs, ordinary done-based attachment, folded overview with bounded expansion, and local-only state.",
+          "Record this user request as feedback and keep each fact in one Product Private owner."
+        ],
+        "mustRead": [
+          "../privacy/product.md",
+          "../privacy/principles.json",
+          "../privacy/user-paths/UP01-ai-runs-graph.md",
+          "../privacy/user-paths/UP02-multi-graph.md",
+          "../privacy/user-paths/UP05-render-graph-artifact.md",
+          "../privacy/architecture.md"
+        ],
+        "doneWhen": [
+          "Product boundaries and non-goals are unambiguous.",
+          "Draft user paths include visible normal, failure, restart, repair, and completion results.",
+          "The proposed paths preserve the existing v1 CLI loop and lightweight package."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "hierarchy-preview"
+        },
+        {
+          "to": "runtime-contract"
+        },
+        {
+          "to": "historical-baseline"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "product",
+        "user-paths"
+      ]
+    },
+    {
+      "id": "hierarchy-preview",
+      "type": "task",
+      "title": "Build hierarchy Product Preview",
+      "prompt": {
+        "objective": "Extend the existing design system and Product Preview with production-faithful parent-child overview, folded and expanded diagrams, Gate, Wait, failure, and recovery states.",
+        "instructions": [
+          "Role: design-system and Product Preview owner for this bounded node.",
+          "Reuse GraphOverviewRegion and GraphDetailRegion; do not create a second visual system or graph editor.",
+          "Keep the Viewer read-only and CLI-first.",
+          "Capture deterministic wide and narrow screenshots and visually inspect them."
+        ],
+        "mustRead": [
+          "packages/design-system/source/design-language.md",
+          "packages/design-system/src/regions/GraphOverviewRegion.tsx",
+          "packages/design-system/src/regions/GraphDetailRegion.tsx",
+          "apps/product-preview/README.md",
+          "apps/product-preview/src/App.tsx",
+          "../privacy/product.md"
+        ],
+        "doneWhen": [
+          "The Preview visibly distinguishes root, parent, child, Gate, Wait, Running, Failed, and aggregate progress.",
+          "Folded overview is readable and expanded hierarchy remains bounded.",
+          "Wide and narrow screenshots have no clipping, illegible status, or conflicting visual language."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "design-system",
+        "preview"
+      ]
+    },
+    {
+      "id": "runtime-contract",
+      "type": "task",
+      "title": "Lock runtime and migration design",
+      "prompt": {
+        "objective": "Define the backward-compatible GraphSpec v2, SQLite hierarchy, cross-run transitions, safe Gate process boundary, Wait signal semantics, resource locks, and CLI additions.",
+        "instructions": [
+          "Role: architecture and contract owner for this bounded node.",
+          "Use static inspection and minimal non-production PoCs only; do not implement the runtime.",
+          "Preserve v1 GraphSpecs, historical Runs, opaque handles, idempotency, bounded output, and exact-process cleanup.",
+          "Resolve transaction, failure, pause, cancel, scheduling, hierarchy limit, and migration behavior."
+        ],
+        "mustRead": [
+          "packages/core/src/contracts.ts",
+          "packages/core/src/validator.ts",
+          "packages/core/src/storage.ts",
+          "packages/core/src/service.ts",
+          "apps/cli/src/index.ts",
+          "docs/graph-spec.md",
+          "docs/cli.md",
+          "../privacy/architecture.md"
+        ],
+        "doneWhen": [
+          "The public data and CLI contracts are decision-complete.",
+          "Cross-run atomicity and recovery behavior have one deterministic rule.",
+          "No command can execute through a shell or stop an unowned process.",
+          "Migration and compatibility Gates are executable."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "architecture",
+        "migration",
+        "cli"
+      ]
+    },
+    {
+      "id": "historical-baseline",
+      "type": "task",
+      "title": "Capture flat-graph baseline",
+      "prompt": {
+        "objective": "Create a reproducible observational baseline from the nine completed historical Runs and dev.4 Evidence for later hierarchy dogfood comparison.",
+        "instructions": [
+          "Role: evaluation evidence owner for this bounded node.",
+          "Use only bounded CLI snapshots and committed Evidence; keep raw JSON under ignored .agent-runtime.",
+          "Record what the old runtime can and cannot measure rather than inventing missing metrics.",
+          "Define beneficial, neutral, and harmful verdict rules before the new runtime exists."
+        ],
+        "mustRead": [
+          "../privacy/slices/S07-render-artifact/versions/0.1.0-dev.4/evidence/verification.md",
+          "../privacy/slices/S07-render-artifact/versions/0.1.0-dev.4/evidence/quality-review.md",
+          "../privacy/project.json",
+          "docs/cli.md"
+        ],
+        "doneWhen": [
+          "Historical Run, node, revision, attempt, and event facts are reproducible.",
+          "The report labels the comparison observational rather than causal.",
+          "Final verdict thresholds include recovery, duplicate work, known-bad Gate detection, quality, and control overhead."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "contract-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dogfood",
+        "metrics",
+        "evidence"
+      ]
+    },
+    {
+      "id": "contract-join",
+      "type": "join",
+      "title": "Converge hierarchy inputs",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "delivery-contract"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    },
+    {
+      "id": "delivery-contract",
+      "type": "task",
+      "title": "Finalize BDD and vertical slices",
+      "prompt": {
+        "objective": "Converge the product paths, visible Preview, architecture, historical baseline, milestones, versions, vertical slices, and executable version plans.",
+        "instructions": [
+          "Role: formal delivery contract owner for this bounded node.",
+          "Write regional BDD with observable normal, concurrency, failure, recovery, safety, migration, and performance outcomes.",
+          "Use M05 dev.5, M06 dev.6, M07 dev.7, and M08 rc.1 with vertical S08 onward slices.",
+          "Update project.json atomically and preserve one fact owner between Graph runtime and project governance."
+        ],
+        "mustRead": [
+          "../privacy/product.md",
+          "../privacy/user-paths",
+          "../privacy/architecture.md",
+          "../privacy/project.json",
+          "packages/design-system/source/design-language.md",
+          "apps/product-preview/README.md"
+        ],
+        "doneWhen": [
+          "Every new user path has BDD, slice, milestone, version, Preview, and Done When references.",
+          "Dependencies permit safe parallel work without duplicate file ownership.",
+          "The only pre-implementation blocker is explicit user confirmation of Preview, User Paths, and BDD."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "contract-gate"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "bdd",
+        "milestone",
+        "slices"
+      ]
+    },
+    {
+      "id": "contract-gate",
+      "type": "decision",
+      "title": "Accept or repair hierarchy contracts",
+      "prompt": {
+        "objective": "Choose pass only when Product Preview, User Paths, BDD, architecture, milestones, slices, plans, and baseline are coherent and ready for user lock.",
+        "instructions": [
+          "Role: read-only contract reviewer for this bounded node.",
+          "Inspect actual screenshots, builds, path references, JSON schemas, and repository diffs.",
+          "Route repair for any ambiguity, missing recovery, unsafe process boundary, duplicate source of truth, or unverifiable Done When."
+        ],
+        "mustRead": [
+          "../privacy/product.md",
+          "../privacy/architecture.md",
+          "../privacy/project.json",
+          "packages/design-system/source/design-language.md",
+          "apps/product-preview/README.md"
+        ],
+        "doneWhen": [
+          "The selected route cites concrete evidence and leaves no hidden implementation decision."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "contracts ready for user lock"
+        },
+        {
+          "to": "product-scope",
+          "route": "repair",
+          "label": "repair contract set",
+          "maxTraversals": 1
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "quality",
+        "decision"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "Hierarchy contracts ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 3,
+      "actorHint": null,
+      "tags": []
+    }
+  ]
+}

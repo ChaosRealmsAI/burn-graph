@@ -18,7 +18,9 @@
 
 .preview-controls > div {
   display: flex;
+  overflow-x: auto;
   gap: 0.35rem;
+  padding: 0.2rem;
 }
 
 .preview-controls button {
@@ -29,6 +31,7 @@
   background: transparent;
   color: #a7b1c2;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .preview-controls button:hover,

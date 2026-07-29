@@ -14,9 +14,11 @@ product contract.
 - burn-graph owns project-local graph definitions, graph-run state,
   Assignments, transitions, evidence references, event history, Mermaid
   projection, and the local read-only Viewer.
-- burn-graph never launches a model, dispatches a subagent, executes a task,
-  runs a verifier, or interprets task output. AI callers use the CLI to receive
-  guarded prompt Assignments and report outcomes.
+- burn-graph never launches a model, dispatches a subagent, executes an AI
+  Task, or interprets task output. AI callers receive guarded prompt
+  Assignments and report outcomes. The only planned process-execution boundary
+  is an exact versioned Check referenced by a Gate; shell strings and arbitrary
+  Task commands remain forbidden.
 - Graph specifications are JSON. Runtime state is SQLite. The CLI is the only
   supported write surface.
 - This repository owns code and public technical documentation only. Product,

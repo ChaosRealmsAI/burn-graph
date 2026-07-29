@@ -25,6 +25,13 @@ export function GraphOverviewRegion({
     (count, graph) => count + graph.counts.ready,
     0,
   );
+  const waiting = graphs.reduce(
+    (count, graph) => count + (graph.counts.waiting ?? 0),
+    0,
+  );
+  const roots = graphs.filter(
+    (graph) => !graph.hierarchy || graph.hierarchy.depth === 0,
+  ).length;
 
   return (
     <section className="bg-overview" aria-label="Graph overview">
@@ -36,16 +43,16 @@ export function GraphOverviewRegion({
       <div className="bg-overview__intro">
         <div>
           <span className="bg-eyebrow">Project control plane</span>
-          <h1>Convergence at a glance.</h1>
+          <h1>Delivery trees, one truthful view.</h1>
           <p>
-            Every graph is local. Every transition is durable. The AI owns the
-            work; burn-graph owns the truth.
+            Fold large delivery into durable child Runs, expand only what needs
+            attention, and keep every transition local.
           </p>
         </div>
         <dl className="bg-overview__totals">
           <div>
-            <dt>Graphs</dt>
-            <dd>{graphs.length}</dd>
+            <dt>Roots</dt>
+            <dd>{roots}</dd>
           </div>
           <div>
             <dt>Running</dt>
@@ -54,6 +61,10 @@ export function GraphOverviewRegion({
           <div>
             <dt>Ready</dt>
             <dd>{ready}</dd>
+          </div>
+          <div>
+            <dt>Waiting</dt>
+            <dd>{waiting}</dd>
           </div>
         </dl>
       </div>

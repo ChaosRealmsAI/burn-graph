@@ -26,7 +26,16 @@ export function GraphCard({
       aria-pressed={selected}
     >
       <span className="bg-graph-card__topline">
-        <span className="bg-graph-card__id">{graph.id}</span>
+        <span className="bg-graph-card__identity">
+          <span className="bg-graph-card__id">{graph.id}</span>
+          {graph.hierarchy ? (
+            <span className="bg-hierarchy-badge">
+              {graph.hierarchy.depth === 0
+                ? `${graph.hierarchy.descendantRuns} descendants`
+                : `depth ${graph.hierarchy.depth}`}
+            </span>
+          ) : null}
+        </span>
         <StatusPill status={graph.status} />
       </span>
       <strong>{graph.title}</strong>
@@ -35,6 +44,13 @@ export function GraphCard({
         <i aria-hidden="true" />
         {graph.focusedNodeTitle ?? "No node in progress"}
       </span>
+      {graph.hierarchy ? (
+        <span className="bg-graph-card__tree">
+          <span>Root {graph.hierarchy.rootRunId}</span>
+          <span>{graph.hierarchy.childRuns} direct children</span>
+          <span>{graph.priority ?? "normal"} priority</span>
+        </span>
+      ) : null}
       <ProgressBar value={progress(graph)} label={`${graph.title} progress`} />
       <span className="bg-graph-card__counts">
         <span>
@@ -46,6 +62,11 @@ export function GraphCard({
         <span>
           <b>{graph.counts.ready}</b> ready
         </span>
+        {(graph.counts.waiting ?? 0) > 0 ? (
+          <span>
+            <b>{graph.counts.waiting}</b> waiting
+          </span>
+        ) : null}
       </span>
     </button>
   );

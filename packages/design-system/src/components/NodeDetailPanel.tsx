@@ -41,6 +41,13 @@ export function NodeDetailPanel({ node }: { readonly node: NodeView | null }) {
         ) : null}
       </dl>
 
+      {node.systemDetail ? (
+        <section className="bg-system-detail">
+          <h3>Runtime-owned state</h3>
+          <p>{node.systemDetail}</p>
+        </section>
+      ) : null}
+
       <section>
         <h3>Objective</h3>
         <p>{node.objective || "Structural node; no external work required."}</p>

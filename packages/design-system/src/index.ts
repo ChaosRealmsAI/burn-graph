@@ -7,9 +7,11 @@ export type {
   GraphCountsView,
   GraphDetailView,
   GraphEventView,
+  GraphHierarchyView,
   GraphSummaryView,
   NodeView,
   ViewerConnection,
   VisualGraphStatus,
   VisualNodeStatus,
+  VisualRunPriority,
 } from "./types.ts";

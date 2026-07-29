@@ -1,50 +1,121 @@
 import {
   GraphDetailRegion,
   GraphOverviewRegion,
+  type GraphDetailView,
   type ViewerConnection,
 } from "@burn-graph/design-system";
 import { useState } from "react";
 
-import { previewDetails, previewGraphs } from "./fixtures.ts";
+import {
+  dogfoodMetricsDetail,
+  durableWaitDetail,
+  gateRepairDetail,
+  hierarchyExpandedDetail,
+  hierarchyFoldedDetail,
+  lifecycleControlDetail,
+  previewDetails,
+  previewGraphs,
+  resourceContentionDetail,
+} from "./fixtures.ts";
 
-type Scene = "overview" | "detail" | "empty" | "reconnecting";
+type Scene =
+  | "hierarchy-overview"
+  | "hierarchy-expanded"
+  | "gate-repair"
+  | "durable-wait"
+  | "lifecycle-control"
+  | "template-portfolio"
+  | "resource-contention"
+  | "dogfood-metrics"
+  | "empty"
+  | "reconnecting";
+
+const scenes: readonly Scene[] = [
+  "hierarchy-overview",
+  "hierarchy-expanded",
+  "gate-repair",
+  "durable-wait",
+  "lifecycle-control",
+  "template-portfolio",
+  "resource-contention",
+  "dogfood-metrics",
+  "empty",
+  "reconnecting",
+];
+
+function detailForScene(
+  scene: Scene,
+  expanded: boolean,
+): GraphDetailView | null {
+  switch (scene) {
+    case "hierarchy-expanded":
+      return expanded ? hierarchyExpandedDetail : hierarchyFoldedDetail;
+    case "gate-repair":
+      return gateRepairDetail;
+    case "resource-contention":
+      return resourceContentionDetail;
+    case "durable-wait":
+      return durableWaitDetail;
+    case "lifecycle-control":
+      return lifecycleControlDetail;
+    case "dogfood-metrics":
+      return dogfoodMetricsDetail;
+    default:
+      return null;
+  }
+}
 
 export function App() {
-  const [scene, setScene] = useState<Scene>("overview");
+  const [scene, setScene] = useState<Scene>("hierarchy-overview");
   const [selectedGraphId, setSelectedGraphId] = useState<string | null>(
-    "delivery-v0.1",
+    "delivery-rc1",
   );
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>("core");
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>("slices");
+  const [expanded, setExpanded] = useState(true);
   const connection: ViewerConnection =
     scene === "reconnecting" ? "reconnecting" : "connected";
-  const detail = selectedGraphId ? previewDetails[selectedGraphId] : undefined;
+  const sceneDetail = detailForScene(scene, expanded);
+  const selectedDetail = selectedGraphId
+    ? previewDetails[selectedGraphId]
+    : undefined;
+  const detail = sceneDetail ?? selectedDetail;
+  const showDetail =
+    sceneDetail !== null ||
+    (scene === "hierarchy-expanded" && selectedDetail !== undefined);
 
   return (
     <>
       <nav className="preview-controls" aria-label="Product Preview controls">
-        <strong>Product Preview · v1</strong>
+        <strong>Product Preview · v2 hierarchy contract</strong>
         <div>
-          {(["overview", "detail", "empty", "reconnecting"] as const).map(
-            (value) => (
-              <button
-                key={value}
-                type="button"
-                className={scene === value ? "is-active" : ""}
-                onClick={() => setScene(value)}
-              >
-                {value}
-              </button>
-            ),
-          )}
+          {scenes.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={scene === value ? "is-active" : ""}
+              onClick={() => {
+                setScene(value);
+                setSelectedNodeId(null);
+                if (value === "hierarchy-expanded") setExpanded(true);
+              }}
+            >
+              {value}
+            </button>
+          ))}
         </div>
       </nav>
 
-      {scene === "detail" && detail ? (
+      {showDetail && detail ? (
         <GraphDetailRegion
           graph={detail}
           selectedNodeId={selectedNodeId}
           onSelectNode={setSelectedNodeId}
-          onBack={() => setScene("overview")}
+          onSelectGraph={(graphId) => {
+            setSelectedGraphId(graphId);
+            setSelectedNodeId(null);
+          }}
+          onToggleHierarchy={() => setExpanded((current) => !current)}
+          onBack={() => setScene("hierarchy-overview")}
         />
       ) : (
         <GraphOverviewRegion
@@ -54,7 +125,13 @@ export function App() {
           onSelect={(graphId) => {
             setSelectedGraphId(graphId);
             setSelectedNodeId(null);
-            setScene("detail");
+            setScene(
+              graphId === "delivery-rc1"
+                ? "hierarchy-expanded"
+                : graphId === "release-package"
+                  ? "durable-wait"
+                  : "gate-repair",
+            );
           }}
         />
       )}
