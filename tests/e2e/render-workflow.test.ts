@@ -159,6 +159,27 @@ describe("package-internal graph rendering", () => {
         expect(lstatSync(svgFile).mode & 0o777).toBe(0o600);
       }
 
+      const treeSvg = await ok(root, [
+        "render",
+        "render-flow:e2e",
+        "--scope",
+        "tree",
+        "--depth",
+        "0",
+        "--limit",
+        "500",
+      ]);
+      expect(treeSvg.data).toMatchObject({
+        runId: "render-flow:e2e",
+        graphId: "render-flow",
+        scope: "tree",
+        projectionDepth: 0,
+        format: "svg",
+        cached: false,
+      });
+      expect(treeSvg.data.artifact).not.toBe(svg.data.artifact);
+      expect(existsSync(artifactFile(root, treeSvg.data.artifact))).toBe(true);
+
       const unavailableBrowser = {
         BURN_GRAPH_CHROME_BIN: path.join(root, "missing-chrome"),
       };

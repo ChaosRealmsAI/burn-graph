@@ -111,6 +111,17 @@ export async function startViewerServer(
         if (url.pathname === "/api/snapshot") {
           return jsonResponse({ ok: true, data: service.projectSnapshot() });
         }
+        if (url.pathname.startsWith("/api/trees/")) {
+          const reference = decodeURIComponent(
+            url.pathname.slice("/api/trees/".length),
+          );
+          const depth = Number(url.searchParams.get("depth") ?? "0");
+          const limit = Number(url.searchParams.get("limit") ?? "500");
+          return jsonResponse({
+            ok: true,
+            data: service.getTreeSnapshot(reference, depth, limit, 100),
+          });
+        }
         if (url.pathname.startsWith("/api/graphs/")) {
           const reference = decodeURIComponent(
             url.pathname.slice("/api/graphs/".length),

@@ -14,6 +14,14 @@ export const IdentifierSchema = z
     "must start with a letter and contain only letters, numbers, . _ : -",
   );
 
+export const IdempotencyKeySchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/,
+    "must contain 1-200 letters, numbers, . _ : -",
+  );
+
 export const PromptContractSchema = z
   .object({
     objective: z.string().trim().default(""),
@@ -21,6 +29,11 @@ export const PromptContractSchema = z
     mustRead: z.array(z.string().trim().min(1)).default([]),
     doneWhen: z.array(z.string().trim().min(1)).default([]),
     outputSchema: z.record(z.string(), z.unknown()).nullable().default(null),
+    role: z.string().trim().max(2_000).default(""),
+    lockedContracts: z.array(z.string().trim().min(1).max(2_000)).default([]),
+    writablePaths: z.array(z.string().trim().min(1).max(2_000)).default([]),
+    forbidden: z.array(z.string().trim().min(1).max(2_000)).default([]),
+    runtime: z.array(z.string().trim().min(1).max(2_000)).default([]),
   })
   .strict()
   .default({
@@ -29,6 +42,11 @@ export const PromptContractSchema = z
     mustRead: [],
     doneWhen: [],
     outputSchema: null,
+    role: "",
+    lockedContracts: [],
+    writablePaths: [],
+    forbidden: [],
+    runtime: [],
   });
 
 export const NextEdgeSpecSchema = z
@@ -45,9 +63,69 @@ export const NodeTypeSchema = z.enum([
   "task",
   "decision",
   "join",
+  "subgraph",
+  "gate",
+  "wait",
   "end",
 ]);
 export type NodeType = z.infer<typeof NodeTypeSchema>;
+
+export const ChildRunDescriptorSchema = z
+  .object({
+    graphId: IdentifierSchema,
+    revision: z.number().int().positive(),
+    runId: IdentifierSchema.optional(),
+    label: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
+export const CheckReferenceSchema = z
+  .object({
+    id: IdentifierSchema,
+    revision: z.number().int().positive(),
+  })
+  .strict();
+
+export const WaitTimeoutSchema = z
+  .object({
+    afterMs: z.number().int().positive().max(31_536_000_000),
+    route: IdentifierSchema,
+  })
+  .strict();
+
+export const WaitSignalSpecSchema = z
+  .object({
+    routes: z.array(IdentifierSchema).min(1).max(32),
+    timeout: WaitTimeoutSchema.optional(),
+  })
+  .strict()
+  .superRefine((signal, context) => {
+    if (new Set(signal.routes).size !== signal.routes.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["routes"],
+        message: "Wait Signal routes must be unique",
+      });
+    }
+    if (signal.timeout && signal.routes.includes(signal.timeout.route)) {
+      context.addIssue({
+        code: "custom",
+        path: ["timeout", "route"],
+        message: "Wait timeout route must be distinct from Signal routes",
+      });
+    }
+  });
+
+const ResourceNamesSchema = z.array(IdentifierSchema).max(32).superRefine(
+  (resources, context) => {
+    if (new Set(resources).size !== resources.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Resources must be unique",
+      });
+    }
+  },
+);
 
 export const NodeSpecSchema = z
   .object({
@@ -59,6 +137,13 @@ export const NodeSpecSchema = z
     maxAttempts: z.number().int().positive().max(20).default(3),
     actorHint: z.string().trim().max(120).nullable().default(null),
     tags: z.array(IdentifierSchema).default([]),
+    mode: z.enum(["static", "dynamic"]).optional(),
+    children: z.array(ChildRunDescriptorSchema).min(1).max(256).optional(),
+    minChildren: z.number().int().positive().max(256).optional(),
+    maxChildren: z.number().int().positive().max(256).optional(),
+    check: CheckReferenceSchema.optional(),
+    signal: WaitSignalSpecSchema.optional(),
+    resources: ResourceNamesSchema.optional(),
   })
   .strict()
   .superRefine((node, context) => {
@@ -77,7 +162,9 @@ export const NodeSpecSchema = z
       });
     }
     if (
-      (node.type === "task" || node.type === "decision") &&
+      (node.type === "task" ||
+        node.type === "decision" ||
+        (node.type === "subgraph" && node.mode === "dynamic")) &&
       node.prompt.objective.length === 0
     ) {
       context.addIssue({
@@ -86,9 +173,110 @@ export const NodeSpecSchema = z
         message: `${node.type} requires a non-empty objective`,
       });
     }
+
+    if (node.type === "subgraph") {
+      if (!node.mode) {
+        context.addIssue({
+          code: "custom",
+          path: ["mode"],
+          message: "Subgraph requires static or dynamic mode",
+        });
+      } else if (node.mode === "static") {
+        if (!node.children || node.children.length === 0) {
+          context.addIssue({
+            code: "custom",
+            path: ["children"],
+            message: "Static Subgraph requires children",
+          });
+        }
+        if (
+          node.minChildren !== undefined ||
+          node.maxChildren !== undefined
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["minChildren"],
+            message: "Static Subgraph cannot declare dynamic bounds",
+          });
+        }
+      } else {
+        if (node.children !== undefined) {
+          context.addIssue({
+            code: "custom",
+            path: ["children"],
+            message: "Dynamic Subgraph cannot declare static children",
+          });
+        }
+        if (
+          node.minChildren === undefined ||
+          node.maxChildren === undefined ||
+          node.minChildren > node.maxChildren
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["maxChildren"],
+            message: "Dynamic Subgraph requires an ordered child range",
+          });
+        }
+      }
+    } else if (
+      node.mode !== undefined ||
+      node.children !== undefined ||
+      node.minChildren !== undefined ||
+      node.maxChildren !== undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["mode"],
+        message: "Only Subgraph may declare child configuration",
+      });
+    }
+
+    if (node.type === "gate" && node.check === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["check"],
+        message: "Gate requires an exact Check revision",
+      });
+    } else if (node.type !== "gate" && node.check !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["check"],
+        message: "Only Gate may reference a Check",
+      });
+    }
+
+    if (node.type === "wait" && node.signal === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["signal"],
+        message: "Wait requires a Signal contract",
+      });
+    } else if (node.type !== "wait" && node.signal !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["signal"],
+        message: "Only Wait may declare a Signal",
+      });
+    }
+
+    if (
+      node.resources !== undefined &&
+      !["task", "subgraph", "gate"].includes(node.type)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["resources"],
+        message: "Only Task, Subgraph, and Gate may declare resources",
+      });
+    }
+
     const routes = node.next.map((edge) => edge.route).filter(Boolean);
-    if (node.type === "decision") {
-      if (node.next.length < 2) {
+    const routedNode = ["decision", "subgraph", "gate", "wait"].includes(
+      node.type,
+    );
+    if (routedNode) {
+      if (node.type === "decision" && node.next.length < 2) {
         context.addIssue({
           code: "custom",
           path: ["next"],
@@ -99,26 +287,26 @@ export const NodeSpecSchema = z
         context.addIssue({
           code: "custom",
           path: ["next"],
-          message: "Every Decision edge requires route",
+          message: `Every ${node.type} edge requires route`,
         });
       }
       if (new Set(routes).size !== routes.length) {
         context.addIssue({
           code: "custom",
           path: ["next"],
-          message: "Decision routes must be unique",
+          message: `${node.type} routes must be unique`,
         });
       }
     } else if (routes.length > 0) {
       context.addIssue({
         code: "custom",
         path: ["next"],
-        message: "Only Decision edges may declare route",
+        message: "Only routed nodes may declare route",
       });
     }
   });
 
-export const GraphSpecSchema = z
+const GraphSpecV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     id: IdentifierSchema,
@@ -130,26 +318,48 @@ export const GraphSpecSchema = z
   })
   .strict();
 
+const GraphSpecV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    id: IdentifierSchema,
+    title: z.string().trim().min(1).max(180),
+    goal: z.string().trim().min(1).max(4_000),
+    revision: z.number().int().positive(),
+    maxActive: z.number().int().positive().max(32).default(8),
+    nodes: z.array(NodeSpecSchema).min(2).max(10_000),
+  })
+  .strict();
+
+export const GraphSpecSchema = z.discriminatedUnion("schemaVersion", [
+  GraphSpecV1Schema,
+  GraphSpecV2Schema,
+]);
+
 export type PromptContract = z.infer<typeof PromptContractSchema>;
 export type NextEdgeSpec = z.infer<typeof NextEdgeSpecSchema>;
 export type NodeSpec = z.infer<typeof NodeSpecSchema>;
 export type GraphSpec = z.infer<typeof GraphSpecSchema>;
+export type ChildRunDescriptor = z.infer<typeof ChildRunDescriptorSchema>;
 
 export const NodeStatusSchema = z.enum([
   "pending",
   "ready",
   "running",
+  "waiting",
   "blocked",
   "done",
   "failed",
   "skipped",
+  "cancelled",
 ]);
 export type NodeStatus = z.infer<typeof NodeStatusSchema>;
 
 export const GraphStatusSchema = z.enum([
   "draft",
   "running",
+  "pausing",
   "paused",
+  "cancelling",
   "completed",
   "failed",
   "cancelled",
@@ -169,6 +379,15 @@ export const CompletionInputSchema = z
   .strict();
 export type CompletionInput = z.infer<typeof CompletionInputSchema>;
 
+export const DynamicSubgraphOutputSchema = z
+  .object({
+    children: z.array(ChildRunDescriptorSchema).min(1).max(256),
+  })
+  .strict();
+export type DynamicSubgraphOutput = z.infer<
+  typeof DynamicSubgraphOutputSchema
+>;
+
 export const CheckpointInputSchema = z
   .object({
     summary: z.string().trim().min(1).max(20_000),
@@ -184,6 +403,8 @@ export interface ProjectConfig {
   readonly createdAt: string;
   readonly defaultLeaseSeconds: number;
   readonly maxAssignmentsPerActor: number;
+  readonly maxHierarchyDepth: number;
+  readonly maxUnfinishedDescendants: number;
 }
 
 export interface RuntimeNode {
@@ -219,10 +440,12 @@ export interface GraphCounts {
   readonly pending: number;
   readonly ready: number;
   readonly running: number;
+  readonly waiting: number;
   readonly blocked: number;
   readonly done: number;
   readonly failed: number;
   readonly skipped: number;
+  readonly cancelled: number;
 }
 
 export interface GraphSummary {
@@ -234,6 +457,11 @@ export interface GraphSummary {
   readonly runtimeRevision: number;
   readonly status: GraphStatus;
   readonly maxActive: number;
+  readonly parentRunId: string | null;
+  readonly parentNodeId: string | null;
+  readonly rootRunId: string;
+  readonly depth: number;
+  readonly priority: "low" | "normal" | "high";
   readonly focusedNodeId: string | null;
   readonly focusedNodeTitle: string | null;
   readonly counts: GraphCounts;
@@ -261,6 +489,45 @@ export interface GraphSnapshot {
   readonly mermaid: string;
 }
 
+export interface RunTreeEntry {
+  readonly summary: GraphSummary;
+  readonly label: string | null;
+  readonly relativeDepth: number;
+  readonly folded: boolean;
+  readonly directChildRuns: number;
+  readonly descendantRuns: number;
+  readonly topology: {
+    readonly spec: GraphSpec;
+    readonly nodes: readonly RuntimeNode[];
+    readonly edges: readonly RuntimeEdge[];
+  } | null;
+}
+
+export interface GraphTreeSnapshot {
+  readonly schemaVersion: 1;
+  readonly root: GraphSnapshot;
+  readonly treeRootRunId: string;
+  readonly runs: readonly RunTreeEntry[];
+  readonly projection: {
+    readonly depth: number;
+    readonly maximumDepth: number;
+    readonly limit: number;
+    readonly totalRuns: number;
+    readonly expandedRuns: number;
+    readonly foldedRuns: number;
+    readonly renderedNodes: number;
+    readonly lastEventSequence: number;
+    readonly capturedAt: string;
+  };
+  readonly mermaid: string;
+}
+
+export interface PortfolioRun {
+  readonly summary: GraphSummary;
+  readonly directChildRuns: number;
+  readonly descendantRuns: number;
+}
+
 export interface AssignmentPacket {
   readonly schemaVersion: 1;
   readonly assignmentId: string;
@@ -276,7 +543,7 @@ export interface AssignmentPacket {
   };
   readonly node: {
     readonly id: string;
-    readonly type: "task" | "decision";
+    readonly type: "task" | "decision" | "subgraph";
     readonly title: string;
     readonly attempt: number;
     readonly actorHint: string | null;
@@ -336,7 +603,7 @@ export interface ReadyWork {
   readonly runId: string;
   readonly graphId: string;
   readonly nodeId: string;
-  readonly type: "task" | "decision";
+  readonly type: "task" | "decision" | "subgraph";
   readonly title: string;
   readonly actorHint: string | null;
   readonly attempt: number;
@@ -369,6 +636,11 @@ export interface MutationResult<T> {
   readonly revision: number;
   readonly event: GraphEvent;
   readonly value: T;
+  readonly changes?: readonly RuntimeChange[];
+}
+
+export interface IdempotentMutationResult<T> extends MutationResult<T> {
+  readonly replayed: boolean;
 }
 
 export class BurnGraphError extends Error {

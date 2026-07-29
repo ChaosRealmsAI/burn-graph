@@ -1,6 +1,6 @@
 # burn-graph Product Preview
 
-Revision `v2-draft` renders deterministic UP06 through UP10 fixtures through
+Revision `v2` renders deterministic UP06 through UP10 fixtures through
 the public design-system Regions. It is the pre-implementation contract for:
 
 - Folded parent-child portfolio and one-level hierarchy expansion.
@@ -16,4 +16,4 @@ Preview scene IDs are `hierarchy-overview`, `hierarchy-expanded`,
 `resource-contention`, and `dogfood-metrics`.
 
 The Preview has no backend, cannot mutate graph state, and does not claim the
-new runtime exists. Revision v2 becomes locked only after user confirmation.
+new runtime exists. Revision v2 is the locked visual contract.

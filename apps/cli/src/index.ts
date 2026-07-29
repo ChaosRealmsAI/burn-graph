@@ -18,6 +18,7 @@ import {
   inspectRenderCapability,
   renderGraphArtifact,
   type RenderFormat,
+  type RenderScope,
 } from "@burn-graph/render";
 import { Command, Option } from "commander";
 import { ZodError } from "zod";
@@ -29,11 +30,13 @@ import {
   viewerInstanceStatus,
 } from "./viewer-runtime.ts";
 
-const VERSION = "0.1.0-dev.4";
+const VERSION = "0.1.0-dev.5";
 const GRAPH_STATUSES: readonly GraphStatus[] = [
   "draft",
   "running",
+  "pausing",
   "paused",
+  "cancelling",
   "completed",
   "failed",
   "cancelled",
@@ -42,9 +45,11 @@ const NODE_STATUSES: readonly NodeStatus[] = [
   "pending",
   "ready",
   "running",
+  "waiting",
   "blocked",
   "done",
   "failed",
+  "cancelled",
   "skipped",
 ];
 
@@ -199,6 +204,19 @@ function nonNegativeInteger(value: string): number {
   return number;
 }
 
+function boundedNonNegativeInteger(maximum: number) {
+  return (value: string): number => {
+    const number = nonNegativeInteger(value);
+    if (number > maximum) {
+      throw new BurnGraphError(
+        "INVALID_NUMBER",
+        `${value} must be an integer between 0 and ${maximum}`,
+      );
+    }
+    return number;
+  };
+}
+
 function scheduleActions(schedule: WorkSchedule): readonly NextAction[] {
   if (schedule.assignments.length > 0) {
     return schedule.assignments.map((assignment) => ({
@@ -208,12 +226,23 @@ function scheduleActions(schedule: WorkSchedule): readonly NextAction[] {
     }));
   }
   if (schedule.state === "waiting") {
+    const paused = schedule.runs.find((run) => run.status === "paused");
     return [
-      {
-        id: "next",
-        command: `burn-graph next --actor ${schedule.actorId}`,
-        description: "Resume existing work or fill newly available slots.",
-      },
+      ...(paused
+        ? [
+            {
+              id: "resume",
+              command: `burn-graph run resume ${paused.runId} --actor ${schedule.actorId} --idempotency-key <new-key>`,
+              description: "Resume the paused Run tree with one stable retry key.",
+            },
+          ]
+        : [
+            {
+              id: "next",
+              command: `burn-graph next --actor ${schedule.actorId}`,
+              description: "Resume existing work or fill newly available slots.",
+            },
+          ]),
       {
         id: "overview",
         command: "burn-graph inspect overview",
@@ -389,14 +418,18 @@ run
   .command("pause")
   .description("pause new scheduling for one Run")
   .argument("<run-or-graph>")
-  .action((reference: string) => {
-    const result = withService((service) => service.pauseRun(reference));
-    success("run.pause", result.value, {
-      changes: mutationChange(result),
+  .requiredOption("--idempotency-key <key>", "stable retry key")
+  .action((reference: string, options: { idempotencyKey: string }) => {
+    const result = withService((service) =>
+      service.pauseRun(reference, options.idempotencyKey),
+    );
+    success("run.pause", { ...result.value, replayed: result.replayed }, {
+      changes:
+        result.changes ?? mutationChange(result),
       nextActions: [
         {
           id: "resume",
-          command: `burn-graph run resume ${reference} --actor primary`,
+          command: `burn-graph run resume ${reference} --actor primary --idempotency-key <new-key>`,
           description: "Resume scheduling when ready.",
         },
       ],
@@ -408,21 +441,35 @@ run
   .description("resume a Run and immediately return prompt Assignments")
   .argument("<run-or-graph>")
   .requiredOption("--actor <id>", "stable Actor ID")
-  .action((reference: string, options: { actor: string }) => {
+  .requiredOption("--idempotency-key <key>", "stable retry key")
+  .action(
+    (
+      reference: string,
+      options: { actor: string; idempotencyKey: string },
+    ) => {
     const result = withService((service) =>
-      service.resumeWithAssignments(reference, options.actor),
+      service.resumeWithAssignments(
+        reference,
+        options.actor,
+        options.idempotencyKey,
+      ),
     );
     scheduleSuccess("run.resume", result);
-  });
+    },
+  );
 
 run
   .command("cancel")
   .description("cancel one Run and release its active claims")
   .argument("<run-or-graph>")
-  .action((reference: string) => {
-    const result = withService((service) => service.cancelRun(reference));
-    success("run.cancel", result.value, {
-      changes: mutationChange(result),
+  .requiredOption("--idempotency-key <key>", "stable retry key")
+  .action((reference: string, options: { idempotencyKey: string }) => {
+    const result = withService((service) =>
+      service.cancelRun(reference, options.idempotencyKey),
+    );
+    success("run.cancel", { ...result.value, replayed: result.replayed }, {
+      changes:
+        result.changes ?? mutationChange(result),
       nextActions: [
         {
           id: "overview",
@@ -476,6 +523,23 @@ program
   .description("materialize one Run as a cached SVG or PNG artifact")
   .argument("<run-or-graph>")
   .addOption(
+    new Option("--scope <scope>", "projection scope")
+      .choices(["run", "tree"])
+      .default("run"),
+  )
+  .option(
+    "--depth <count>",
+    "expanded child Run depth for tree scope",
+    boundedNonNegativeInteger(8),
+    0,
+  )
+  .option(
+    "--limit <count>",
+    "maximum rendered tree nodes",
+    boundedInteger(500),
+    500,
+  )
+  .addOption(
     new Option("--format <format>", "artifact format")
       .choices(["svg", "png"])
       .default("svg"),
@@ -483,29 +547,56 @@ program
   .action(
     async (
       reference: string,
-      options: { format: RenderFormat },
+      options: {
+        scope: RenderScope;
+        depth: number;
+        limit: number;
+        format: RenderFormat;
+      },
     ) => {
       const root = discoverProjectRoot(
         globalOptions().root ?? process.cwd(),
       );
-      const snapshot = (() => {
+      const projection = (() => {
         const service = new BurnGraphService(root);
         try {
-          return service.getSnapshot(reference, 0);
+          if (options.scope === "tree") {
+            const tree = service.getTreeSnapshot(
+              reference,
+              options.depth,
+              options.limit,
+              0,
+            );
+            return {
+              snapshot: { ...tree.root, mermaid: tree.mermaid },
+              tree: tree.projection,
+            };
+          }
+          return {
+            snapshot: service.getSnapshot(reference, 0),
+            tree: null,
+          };
         } finally {
           service.close();
         }
       })();
       const data = await renderGraphArtifact({
         projectRoot: root,
-        snapshot,
+        snapshot: projection.snapshot,
         format: options.format,
+        scope: options.scope,
+        ...(options.scope === "tree"
+          ? { projectionDepth: options.depth }
+          : {}),
       });
       success("render", data, {
         nextActions: [
           {
             id: "inspect-run",
-            command: `burn-graph inspect run ${snapshot.summary.runId}`,
+            command:
+              options.scope === "tree"
+                ? `burn-graph inspect tree ${projection.snapshot.summary.runId} --depth ${options.depth} --limit ${options.limit}`
+                : `burn-graph inspect run ${projection.snapshot.summary.runId}`,
             description: "Inspect the canonical Run behind this projection.",
           },
         ],
@@ -658,6 +749,42 @@ inspect
   });
 
 inspect
+  .command("tree")
+  .description("show one bounded folded or expanded Run tree snapshot")
+  .argument("<run-or-graph>")
+  .option(
+    "--depth <count>",
+    "expanded child Run depth",
+    boundedNonNegativeInteger(8),
+    0,
+  )
+  .option(
+    "--limit <count>",
+    "maximum rendered nodes",
+    boundedInteger(500),
+    500,
+  )
+  .option("--events <count>", "root event count", boundedInteger(1_000), 100)
+  .action(
+    (
+      reference: string,
+      options: { depth: number; limit: number; events: number },
+    ) => {
+      success(
+        "inspect.tree",
+        withService((service) =>
+          service.getTreeSnapshot(
+            reference,
+            options.depth,
+            options.limit,
+            options.events,
+          ),
+        ),
+      );
+    },
+  );
+
+inspect
   .command("node")
   .description("show one Node, its prompt, Attempts, edges, and events")
   .argument("<run-or-graph>")
@@ -701,17 +828,61 @@ inspect
 
 inspect
   .command("mermaid")
-  .description("return one Run's Mermaid projection inside JSON")
+  .description("return one Run or Run tree Mermaid projection inside JSON")
   .argument("<run-or-graph>")
-  .action((reference: string) => {
-    const snapshot = withService((service) => service.getSnapshot(reference, 0));
+  .addOption(
+    new Option("--scope <scope>", "projection scope")
+      .choices(["run", "tree"])
+      .default("run"),
+  )
+  .option(
+    "--depth <count>",
+    "expanded child Run depth for tree scope",
+    boundedNonNegativeInteger(8),
+    0,
+  )
+  .option(
+    "--limit <count>",
+    "maximum rendered tree nodes",
+    boundedInteger(500),
+    500,
+  )
+  .action(
+    (
+      reference: string,
+      options: { scope: RenderScope; depth: number; limit: number },
+    ) => {
+      const projection = withService((service) => {
+        if (options.scope === "tree") {
+          const tree = service.getTreeSnapshot(
+            reference,
+            options.depth,
+            options.limit,
+            0,
+          );
+          return {
+            summary: tree.root.summary,
+            source: tree.mermaid,
+            projection: tree.projection,
+          };
+        }
+        const snapshot = service.getSnapshot(reference, 0);
+        return {
+          summary: snapshot.summary,
+          source: snapshot.mermaid,
+          projection: null,
+        };
+      });
     success("inspect.mermaid", {
-      runId: snapshot.summary.runId,
-      graphId: snapshot.summary.graphId,
-      runtimeRevision: snapshot.summary.runtimeRevision,
-      source: snapshot.mermaid,
+        runId: projection.summary.runId,
+        graphId: projection.summary.graphId,
+        runtimeRevision: projection.summary.runtimeRevision,
+        scope: options.scope,
+        projection: projection.projection,
+        source: projection.source,
     });
-  });
+    },
+  );
 
 inspect
   .command("events")
@@ -861,10 +1032,15 @@ recover
     const results = withService((service) =>
       service.reconcileExpired(reference),
     );
-    const changes = results.map((result) => ({
-      revision: result.revision,
-      event: result.event,
-    }));
+    const changes = results.flatMap(
+      (result) =>
+        result.changes ?? [
+          {
+            revision: result.revision,
+            event: result.event,
+          },
+        ],
+    );
     success(
       "recover.reconcile",
       {
@@ -1025,10 +1201,39 @@ const helpDetails = new Map<string, HelpDetail>([
   ["graph.show", { mutates: false }],
   ["graph.clone", { mutates: true, next: ["run.start"] }],
   ["run", { mutates: false }],
-  ["run.start", { mutates: true, output: "WorkSchedule with AssignmentPacket[]" }],
-  ["run.pause", { mutates: true }],
-  ["run.resume", { mutates: true, output: "WorkSchedule with AssignmentPacket[]" }],
-  ["run.cancel", { mutates: true }],
+  [
+    "run.start",
+    {
+      mutates: true,
+      output: "WorkSchedule with AssignmentPacket[]",
+      errors: ["SYSTEM_NODE_UNAVAILABLE"],
+    },
+  ],
+  [
+    "run.pause",
+    {
+      mutates: true,
+      input: { idempotencyKey: "required stable retry key" },
+      errors: ["INVALID_RUN_STATE", "IDEMPOTENCY_KEY_CONFLICT"],
+    },
+  ],
+  [
+    "run.resume",
+    {
+      mutates: true,
+      input: { idempotencyKey: "required stable retry key" },
+      output: "WorkSchedule with AssignmentPacket[]",
+      errors: ["INVALID_RUN_STATE", "IDEMPOTENCY_KEY_CONFLICT"],
+    },
+  ],
+  [
+    "run.cancel",
+    {
+      mutates: true,
+      input: { idempotencyKey: "required stable retry key" },
+      errors: ["INVALID_RUN_STATE", "IDEMPOTENCY_KEY_CONFLICT"],
+    },
+  ],
   ["next", { mutates: true, output: "WorkSchedule with AssignmentPacket[]" }],
   ["current", { mutates: false, output: "Actor focus and complete AssignmentPacket[]" }],
   [
@@ -1073,6 +1278,7 @@ const helpDetails = new Map<string, HelpDetail>([
   ["inspect", { mutates: false }],
   ["inspect.overview", { mutates: false }],
   ["inspect.run", { mutates: false }],
+  ["inspect.tree", { mutates: false, output: "bounded GraphTreeSnapshot" }],
   ["inspect.node", { mutates: false }],
   ["inspect.ready", { mutates: false, next: ["next"] }],
   ["inspect.mermaid", { mutates: false, output: "{ source: Mermaid string }" }],
@@ -1121,7 +1327,16 @@ const helpTopics: Readonly<Record<string, unknown>> = {
   "graph-spec": {
     title: "GraphSpec authoring contract",
     source: ".burn-graph/graphs/<graph-id>.json",
-    nodeTypes: ["start", "task", "decision", "join", "end"],
+    nodeTypes: [
+      "start",
+      "task",
+      "decision",
+      "join",
+      "subgraph",
+      "gate",
+      "wait",
+      "end",
+    ],
     required: [
       "one Start and one End",
       "all nodes reachable and convergent",
@@ -1129,12 +1344,32 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "explicit bounded Decision back-edges",
     ],
     commands: ["graph validate", "graph apply", "graph show"],
+    executionAvailability: {
+      "0.1.0-dev.5":
+        "Subgraph executes; Gate and Wait authoring is contract-only.",
+      next:
+        "Gate and Wait execute through the System Node Driver in 0.1.0-dev.6.",
+    },
+  },
+  lifecycle: {
+    title: "Idempotent Run-tree lifecycle",
+    commands: [
+      "run pause <run> --idempotency-key <key>",
+      "run resume <run> --actor <actor> --idempotency-key <new-key>",
+      "run cancel <run> --idempotency-key <new-key>",
+    ],
+    invariants: [
+      "Pause suppresses new descendant work while existing Assignment handles settle.",
+      "Equivalent key replay adds no revision or event.",
+      "Reusing a key for another operation or reference is rejected.",
+    ],
   },
   inspect: {
     title: "Read-only inspection",
     commands: [
       "inspect overview",
       "inspect run",
+      "inspect tree",
       "inspect node",
       "inspect ready",
       "inspect mermaid",
@@ -1144,6 +1379,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
   render: {
     title: "Project-local graph artifacts",
     default: "burn-graph render <run-or-graph>",
+    scopes: ["run", "tree"],
     formats: ["svg", "png"],
     storage: ".burn-graph/runtime/renders/",
     invariants: [

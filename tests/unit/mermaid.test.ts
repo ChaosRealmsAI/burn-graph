@@ -18,7 +18,7 @@ describe("Mermaid projection", () => {
         ...graph,
         nodes: graph.nodes.map((node) =>
           node.id === "left"
-            ? { ...node, title: "Review <unsafe> & \"quoted\"" }
+            ? { ...node, title: "Review <unsafe> & \"quoted\" | line\nnext" }
             : node,
         ),
       });
@@ -27,6 +27,7 @@ describe("Mermaid projection", () => {
         "Review &lt;unsafe&gt; &amp; 'quoted'",
       );
       expect(snapshot.mermaid).not.toContain("<unsafe>");
+      expect(snapshot.mermaid).toContain("&#124; line next");
       expect(snapshot.mermaid).toContain(":::ready");
       expect(snapshot.mermaid).toContain("n_6c656674");
     } finally {

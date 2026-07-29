@@ -99,6 +99,114 @@ export function validateGraphSpec(input: unknown): ValidatedGraph {
     });
   }
   const spec = parsed.data;
+
+  const systemTypes = new Set(["subgraph", "gate", "wait"]);
+  if (
+    spec.schemaVersion === 1 &&
+    spec.nodes.some((node) => systemTypes.has(node.type))
+  ) {
+    throw new BurnGraphError(
+      "INVALID_GRAPH",
+      "GraphSpec v1 cannot declare v2 System Nodes",
+    );
+  }
+  if (spec.schemaVersion === 1) {
+    const extended = spec.nodes.find(
+      (node) =>
+        node.resources !== undefined ||
+        node.prompt.role.length > 0 ||
+        node.prompt.lockedContracts.length > 0 ||
+        node.prompt.writablePaths.length > 0 ||
+        node.prompt.forbidden.length > 0 ||
+        node.prompt.runtime.length > 0,
+    );
+    if (extended) {
+      throw new BurnGraphError(
+        "INVALID_GRAPH",
+        `GraphSpec v1 node ${extended.id} cannot declare v2 prompt or resource fields`,
+        false,
+        { nodeId: extended.id },
+      );
+    }
+  }
+
+  for (const node of spec.nodes) {
+    if (node.type === "subgraph") {
+      const childCount =
+        node.mode === "static" ? (node.children?.length ?? 0) : node.maxChildren;
+      if (childCount !== undefined && childCount > 32) {
+        throw new BurnGraphError(
+          "HIERARCHY_LIMIT",
+          `Subgraph ${node.id} exceeds the 32-child package limit`,
+          false,
+          { nodeId: node.id, childCount, limit: 32 },
+        );
+      }
+      if (
+        node.mode === "static" &&
+        node.children?.some((child) => child.graphId === spec.id)
+      ) {
+        throw new BurnGraphError(
+          "HIERARCHY_CYCLE",
+          `Subgraph ${node.id} cannot reference its own GraphSpec`,
+          false,
+          { nodeId: node.id, graphId: spec.id },
+        );
+      }
+      const allowed = new Set(["success", "failure", "cancelled"]);
+      const invalid = node.next.find(
+        (edge) => edge.route === undefined || !allowed.has(edge.route),
+      );
+      if (invalid) {
+        throw new BurnGraphError(
+          "INVALID_ROUTE",
+          `Subgraph ${node.id} has unsupported route ${invalid.route ?? ""}`,
+          false,
+          { routes: [...allowed] },
+        );
+      }
+      if (!node.next.some((edge) => edge.route === "success")) {
+        throw new BurnGraphError(
+          "INVALID_ROUTE",
+          `Subgraph ${node.id} requires a success route`,
+          false,
+          { routes: [...allowed] },
+        );
+      }
+    } else if (node.type === "gate") {
+      const routes = new Set(node.next.map((edge) => edge.route));
+      if (
+        routes.size !== 2 ||
+        !routes.has("pass") ||
+        !routes.has("fail")
+      ) {
+        throw new BurnGraphError(
+          "INVALID_ROUTE",
+          `Gate ${node.id} requires exact pass and fail routes`,
+          false,
+          { routes: ["pass", "fail"] },
+        );
+      }
+    } else if (node.type === "wait") {
+      const declared = new Set([
+        ...(node.signal?.routes ?? []),
+        ...(node.signal?.timeout ? [node.signal.timeout.route] : []),
+      ]);
+      const actual = new Set(node.next.map((edge) => edge.route));
+      if (
+        actual.size !== declared.size ||
+        [...declared].some((route) => !actual.has(route))
+      ) {
+        throw new BurnGraphError(
+          "INVALID_ROUTE",
+          `Wait ${node.id} routes must match its Signal contract`,
+          false,
+          { routes: [...declared] },
+        );
+      }
+    }
+  }
+
   const nodesById = new Map<string, NodeSpec>();
   for (const node of spec.nodes) {
     if (nodesById.has(node.id)) {

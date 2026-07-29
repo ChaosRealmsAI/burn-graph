@@ -9,6 +9,7 @@ export const MAX_PNG_HEIGHT = 1600;
 export const DEFAULT_RENDER_TIMEOUT_MS = 20_000;
 
 export type RenderFormat = "svg" | "png";
+export type RenderScope = "run" | "tree";
 
 export interface RenderBrowser {
   readonly name: string;
@@ -38,6 +39,8 @@ export interface RenderArtifact {
   readonly runId: string;
   readonly graphId: string;
   readonly runtimeRevision: number;
+  readonly scope: RenderScope;
+  readonly projectionDepth: number | null;
   readonly sourceHash: string;
   readonly format: RenderFormat;
   readonly theme: "dark";
@@ -59,6 +62,8 @@ export interface RenderGraphOptions {
   readonly projectRoot: string;
   readonly snapshot: GraphSnapshot;
   readonly format: RenderFormat;
+  readonly scope?: RenderScope;
+  readonly projectionDepth?: number;
   readonly assetsDirectory?: string;
   readonly chromeExecutable?: string;
   readonly timeoutMs?: number;

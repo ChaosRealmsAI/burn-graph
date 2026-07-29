@@ -24,6 +24,7 @@ import {
   type PublicRenderBrowser,
   type RenderArtifact,
   type RenderFormat,
+  type RenderScope,
 } from "./contracts.ts";
 import { pngDimensions, sha256, validateSvg } from "./validation.ts";
 
@@ -32,6 +33,8 @@ export interface CacheIdentity {
   readonly runId: string;
   readonly graphId: string;
   readonly runtimeRevision: number;
+  readonly scope: RenderScope;
+  readonly projectionDepth: number | null;
   readonly sourceHash: string;
   readonly format: RenderFormat;
   readonly key: string;
@@ -64,15 +67,22 @@ export function cacheIdentity(input: {
   readonly runId: string;
   readonly graphId: string;
   readonly runtimeRevision: number;
+  readonly scope?: RenderScope;
+  readonly projectionDepth?: number | null;
   readonly sourceHash: string;
   readonly format: RenderFormat;
 }): CacheIdentity {
+  const scope = input.scope ?? "run";
+  const projectionDepth =
+    scope === "tree" ? (input.projectionDepth ?? 0) : null;
   const key = sha256(
     JSON.stringify({
       schemaVersion: 1,
       runId: input.runId,
       graphId: input.graphId,
       runtimeRevision: input.runtimeRevision,
+      scope,
+      projectionDepth,
       sourceHash: input.sourceHash,
       format: input.format,
       theme: MERMAID_THEME,
@@ -90,6 +100,8 @@ export function cacheIdentity(input: {
   const artifactFile = path.join(runDirectory, `${key}.${input.format}`);
   return {
     ...input,
+    scope,
+    projectionDepth,
     key,
     runDirectory,
     artifactFile,
@@ -122,6 +134,8 @@ function validStoredArtifact(
     candidate.runId === identity.runId &&
     candidate.graphId === identity.graphId &&
     candidate.runtimeRevision === identity.runtimeRevision &&
+    candidate.scope === identity.scope &&
+    candidate.projectionDepth === identity.projectionDepth &&
     candidate.sourceHash === identity.sourceHash &&
     candidate.format === identity.format &&
     candidate.theme === MERMAID_THEME &&
@@ -193,6 +207,8 @@ export function storeArtifact(
     runId: identity.runId,
     graphId: identity.graphId,
     runtimeRevision: identity.runtimeRevision,
+    scope: identity.scope,
+    projectionDepth: identity.projectionDepth,
     sourceHash: identity.sourceHash,
     format: identity.format,
     theme: MERMAID_THEME,
@@ -285,11 +301,19 @@ export function pruneOlderRevisions(
       const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
         readonly runId?: unknown;
         readonly runtimeRevision?: unknown;
+        readonly scope?: unknown;
+        readonly sourceHash?: unknown;
         readonly artifact?: unknown;
       };
+      const staleRevision =
+        parsed.runtimeRevision !== identity.runtimeRevision;
+      const staleTreeSource =
+        identity.scope === "tree" &&
+        parsed.sourceHash !== identity.sourceHash;
       if (
         parsed.runId !== identity.runId ||
-        parsed.runtimeRevision === identity.runtimeRevision ||
+        parsed.scope !== identity.scope ||
+        (!staleRevision && !staleTreeSource) ||
         typeof parsed.artifact !== "string"
       ) {
         continue;

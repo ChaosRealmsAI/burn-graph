@@ -63,6 +63,8 @@ export function initializeProject(rootInput: string, now: string): ProjectConfig
     createdAt: now,
     defaultLeaseSeconds: 900,
     maxAssignmentsPerActor: 8,
+    maxHierarchyDepth: 8,
+    maxUnfinishedDescendants: 256,
   };
   atomicWriteJson(configFile, config);
   writeFileSync(path.join(stateRoot, ".gitignore"), "runtime/\n", {
@@ -100,7 +102,17 @@ export function readProjectConfig(root: string): ProjectConfig {
       (typeof parsed.maxAssignmentsPerActor !== "number" ||
         !Number.isInteger(parsed.maxAssignmentsPerActor) ||
         parsed.maxAssignmentsPerActor < 1 ||
-        parsed.maxAssignmentsPerActor > 32))
+        parsed.maxAssignmentsPerActor > 32)) ||
+    (parsed.maxHierarchyDepth !== undefined &&
+      (typeof parsed.maxHierarchyDepth !== "number" ||
+        !Number.isInteger(parsed.maxHierarchyDepth) ||
+        parsed.maxHierarchyDepth < 1 ||
+        parsed.maxHierarchyDepth > 8)) ||
+    (parsed.maxUnfinishedDescendants !== undefined &&
+      (typeof parsed.maxUnfinishedDescendants !== "number" ||
+        !Number.isInteger(parsed.maxUnfinishedDescendants) ||
+        parsed.maxUnfinishedDescendants < 1 ||
+        parsed.maxUnfinishedDescendants > 256))
   ) {
     throw new BurnGraphError("INVALID_CONFIG", `Invalid config at ${file}`);
   }
@@ -110,6 +122,8 @@ export function readProjectConfig(root: string): ProjectConfig {
     createdAt: parsed.createdAt,
     defaultLeaseSeconds: parsed.defaultLeaseSeconds,
     maxAssignmentsPerActor: parsed.maxAssignmentsPerActor ?? 8,
+    maxHierarchyDepth: parsed.maxHierarchyDepth ?? 8,
+    maxUnfinishedDescendants: parsed.maxUnfinishedDescendants ?? 256,
   };
 }
 

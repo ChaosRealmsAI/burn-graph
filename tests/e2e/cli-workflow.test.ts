@@ -128,7 +128,15 @@ describe("converged public CLI", () => {
     expect(areaHelp.data.kind).toBe("area");
     expect(
       areaHelp.data.commands.map((command: any) => command.name),
-    ).toEqual(["overview", "run", "node", "ready", "mermaid", "events"]);
+    ).toEqual([
+      "overview",
+      "run",
+      "tree",
+      "node",
+      "ready",
+      "mermaid",
+      "events",
+    ]);
 
     const commandHelp = await ok(root, ["done", "--help"]);
     expect(commandHelp.data).toMatchObject({
@@ -150,7 +158,7 @@ describe("converged public CLI", () => {
       "burn-graph done --help",
     );
     const version = await ok(root, ["--version"]);
-    expect(version.data.version).toBe("0.1.0-dev.4");
+    expect(version.data.version).toBe("0.1.0-dev.5");
 
     for (const removed of [
       ["work", "--help"],

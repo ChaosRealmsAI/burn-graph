@@ -28,7 +28,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-dev.4.tgz",
+  "burn-graph-0.1.0-dev.5.tgz",
 );
 const roots: string[] = [];
 
@@ -199,7 +199,7 @@ describe("lightweight Bun package", () => {
       schemaVersion: 1,
       ok: true,
       command: "version",
-      data: { version: "0.1.0-dev.4" },
+      data: { version: "0.1.0-dev.5" },
     });
 
     const installedPackage = path.join(
@@ -263,33 +263,62 @@ describe("lightweight Bun package", () => {
     expect(
       existsSync(path.resolve(projectRoot, rendered.data.artifact)),
     ).toBe(true);
+    const afterRender = await installedCli(executable, projectRoot, [
+      "current",
+      "--actor",
+      "installed",
+    ]);
+    expect(
+      afterRender.data.assignments
+        .map((assignment: any) => assignment.assignmentId)
+        .sort(),
+    ).toEqual([left.assignmentId, right.assignmentId].sort());
 
-    await Promise.all([
-      installedCli(
+    const completions = await Promise.all([
+      command(
         executable,
-        projectRoot,
         [
+          "--root",
+          projectRoot,
           "done",
           "--assignment",
           left.assignmentId,
           "--input",
           "-",
         ],
-        JSON.stringify({ summary: "Installed left completed." }),
+        {
+          cwd: projectRoot,
+          stdin: JSON.stringify({ summary: "Installed left completed." }),
+        },
       ),
-      installedCli(
+      command(
         executable,
-        projectRoot,
         [
+          "--root",
+          projectRoot,
           "done",
           "--assignment",
           right.assignmentId,
           "--input",
           "-",
         ],
-        JSON.stringify({ summary: "Installed right completed." }),
+        {
+          cwd: projectRoot,
+          stdin: JSON.stringify({ summary: "Installed right completed." }),
+        },
       ),
     ]);
+    if (completions.some((completion) => completion.exitCode !== 0)) {
+      const diagnostic = await installedCli(executable, projectRoot, [
+        "inspect",
+        "run",
+        "installed:smoke",
+      ]);
+      expect(
+        completions.every((completion) => completion.exitCode === 0),
+        JSON.stringify({ completions, diagnostic: diagnostic.data.nodes }),
+      ).toBe(true);
+    }
     const completed = await installedCli(executable, projectRoot, [
       "inspect",
       "run",
@@ -366,6 +395,22 @@ describe("lightweight Bun package", () => {
         { method: "POST" },
       );
       expect(mutation.status).toBe(405);
+      const treeResponse = await fetch(
+        `http://127.0.0.1:${viewerPort}/api/trees/${encodeURIComponent("installed:wide")}?depth=0&limit=500`,
+      );
+      expect(treeResponse.status).toBe(200);
+      const treeEnvelope = (await treeResponse.json()) as any;
+      expect(treeEnvelope).toMatchObject({
+        ok: true,
+        data: {
+          root: { summary: { runId: "installed:wide" } },
+          projection: {
+            depth: 0,
+            totalRuns: 1,
+            renderedNodes: 100,
+          },
+        },
+      });
     } finally {
       await installedCli(executable, projectRoot, [
         "viewer",
@@ -398,10 +443,11 @@ describe("lightweight Bun package", () => {
           packagedHundredNodeBytes: installedWideRender.data.bytes,
           packagedViewerHealth: 200,
           packagedViewerMutation: 405,
+          packagedViewerTreeProjection: 100,
         },
         null,
         2,
       )}\n`,
     );
-  });
+  }, 60_000);
 });

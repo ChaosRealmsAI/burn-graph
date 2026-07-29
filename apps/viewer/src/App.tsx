@@ -7,13 +7,14 @@ import {
 } from "@burn-graph/design-system";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { fetchGraph, fetchProjectSnapshot } from "./api.ts";
-import { graphDetailView, graphSummaryView } from "./view-model.ts";
+import { fetchProjectSnapshot, fetchTree } from "./api.ts";
+import { graphSummaryView, graphTreeDetailView } from "./view-model.ts";
 
 export function App() {
   const [graphs, setGraphs] = useState<readonly GraphSummaryView[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [projectionDepth, setProjectionDepth] = useState(0);
   const [detail, setDetail] = useState<GraphDetailView | null>(null);
   const [connection, setConnection] =
     useState<ViewerConnection>("reconnecting");
@@ -23,12 +24,19 @@ export function App() {
   const refresh = useCallback(async () => {
     const snapshot = await fetchProjectSnapshot();
     cursor.current = Math.max(cursor.current, snapshot.lastEventSequence);
-    setGraphs(snapshot.runs.map(graphSummaryView));
+    setGraphs(
+      snapshot.rootRuns.map((run) =>
+        graphSummaryView(run.summary, {
+          directChildRuns: run.directChildRuns,
+          descendantRuns: run.descendantRuns,
+        }),
+      ),
+    );
     if (selectedRunId) {
-      const graph = await fetchGraph(selectedRunId);
-      setDetail(graphDetailView(graph));
+      const graph = await fetchTree(selectedRunId, projectionDepth);
+      setDetail(graphTreeDetailView(graph));
     }
-  }, [selectedRunId]);
+  }, [projectionDepth, selectedRunId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,9 +75,10 @@ export function App() {
   const openGraph = useCallback(async (runId: string) => {
     setSelectedRunId(runId);
     setSelectedNodeId(null);
+    setProjectionDepth(0);
     setError(null);
     try {
-      setDetail(graphDetailView(await fetchGraph(runId)));
+      setDetail(graphTreeDetailView(await fetchTree(runId, 0)));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Graph unavailable");
     }
@@ -97,7 +106,12 @@ export function App() {
         onBack={() => {
           setSelectedRunId(null);
           setDetail(null);
+          setProjectionDepth(0);
         }}
+        onSelectGraph={(runId) => void openGraph(runId)}
+        onToggleHierarchy={() =>
+          setProjectionDepth((current) => (current === 0 ? 1 : 0))
+        }
       />
     );
   }

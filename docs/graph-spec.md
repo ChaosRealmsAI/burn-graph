@@ -1,7 +1,9 @@
 # GraphSpec
 
 GraphSpec is authored as JSON. Start, Join, and End are structural and
-auto-complete. Task and Decision are the only assignable node types.
+auto-complete. Task and Decision are assignable in both versions; a v2 dynamic
+Subgraph is also assignable because its completion seals an immutable child
+set. Static Subgraph, Gate, and Wait are package-driven System Nodes.
 
 ```json
 {
@@ -80,6 +82,80 @@ Omitted prompt arrays, `actorHint`, `tags`, and `maxAttempts` receive normalized
 defaults during validation. `actorHint` affects scheduler ranking but does not
 restrict ownership.
 
+## Version 2 hierarchy
+
+Version 1 remains valid and immutable. Validation normalizes the additional
+prompt fields `role`, `lockedContracts`, `writablePaths`, `forbidden`, and
+`runtime` to empty values when omitted; non-empty values and node resources
+require version 2. Version 2 adds `subgraph`, `gate`, and `wait` nodes while
+keeping the CLI response envelope at schema version 1.
+
+In `0.1.0-dev.5`, Gate and Wait are forward-compatible authoring contracts
+only. `graph validate` and `graph apply` accept their locked shapes, but
+`run start` rejects any reachable static closure containing either type with
+`SYSTEM_NODE_UNAVAILABLE` before creating a Run. Subgraph execution is fully
+available. Gate and Wait execution arrives with the package-owned System Node
+Driver in `0.1.0-dev.6`; this fail-fast boundary prevents a valid definition
+from becoming silent Ready work that no Actor can own.
+
+A static Subgraph pins one to 32 exact child Graph revisions:
+
+```json
+{
+  "id": "slices",
+  "type": "subgraph",
+  "title": "Run slices",
+  "mode": "static",
+  "children": [
+    { "graphId": "vertical-slice", "revision": 3, "label": "hierarchy" },
+    {
+      "graphId": "vertical-slice",
+      "revision": 3,
+      "runId": "stable-slice-render",
+      "label": "render"
+    }
+  ],
+  "resources": [],
+  "next": [
+    { "to": "done", "route": "success" },
+    { "to": "repair", "route": "failure" },
+    { "to": "cancelled", "route": "cancelled" }
+  ]
+}
+```
+
+A dynamic Subgraph replaces `children` with `minChildren` and `maxChildren`,
+and requires a non-empty prompt. Its ordinary `done.output.children` contains
+only exact `graphId`, `revision`, optional stable `runId`, and optional
+`label`. The entire set validates before any child link or Run is created.
+Equivalent replay returns the first continuation without creating another
+Assignment, Run, revision, or event; changed replay input is rejected.
+
+Subgraph routes are `success`, `failure`, and `cancelled`; `success` is
+required while failure outcomes without a declared route fail the parent
+instead of being inferred. Gate requires exact `pass` and `fail` routes. Wait
+edges exactly match its declared Signal routes and optional timeout route.
+
+Hierarchy is bounded to 32 children per Subgraph, eight levels, and 256
+unfinished descendants per root. Project config may lower but never raise the
+package limits. A child pins one Graph revision, has one parent node and root,
+and cannot reference a GraphSpec already present in its ancestor chain.
+
+The runtime exposes one canonical bounded tree projection:
+
+```bash
+burn-graph inspect tree <run> --depth 0 --limit 500
+burn-graph inspect mermaid <run> --scope tree --depth 1 --limit 500
+burn-graph render <run> --scope tree --depth 1 --format svg
+```
+
+Depth zero expands only the selected Run. Each expanded Run exposes its direct
+children as folded status/progress nodes; deeper descendants remain summarized
+behind that frontier instead of being enumerated. Each additional depth expands
+one more child topology level. Expanded Graph nodes and visible folded Runs
+share the same 500-node budget. CLI, Viewer, SVG, and PNG consume one
+transactionally consistent projection and never mutate it.
+
 ## Invariants
 
 - Exactly one Start and one End exist.
@@ -90,6 +166,8 @@ restrict ownership.
 - Every Decision edge has a unique route.
 - Join has at least two incoming branches and waits until all are resolved.
 - A normal Task activates every Next edge; Decision activates exactly one.
+- A Subgraph seals its child set before entering Waiting and selects one
+  declared structural outcome only after every child is terminal.
 - All-disabled branches become Skipped and propagate that state.
 - A Run pins one immutable GraphSpec revision.
 

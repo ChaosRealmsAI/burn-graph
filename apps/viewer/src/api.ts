@@ -1,6 +1,8 @@
 import type {
   GraphSnapshot,
   GraphSummary,
+  GraphTreeSnapshot,
+  PortfolioRun,
 } from "@burn-graph/core";
 
 interface ApiEnvelope<T> {
@@ -15,6 +17,7 @@ interface ApiEnvelope<T> {
 export interface ProjectSnapshotResponse {
   readonly projectId: string;
   readonly runs: readonly GraphSummary[];
+  readonly rootRuns: readonly PortfolioRun[];
   readonly lastEventSequence: number;
   readonly capturedAt: string;
 }
@@ -36,4 +39,18 @@ export function fetchProjectSnapshot(): Promise<ProjectSnapshotResponse> {
 
 export function fetchGraph(reference: string): Promise<GraphSnapshot> {
   return request<GraphSnapshot>(`/api/graphs/${encodeURIComponent(reference)}`);
+}
+
+export function fetchTree(
+  reference: string,
+  depth: number,
+  limit = 500,
+): Promise<GraphTreeSnapshot> {
+  const query = new URLSearchParams({
+    depth: String(depth),
+    limit: String(limit),
+  });
+  return request<GraphTreeSnapshot>(
+    `/api/trees/${encodeURIComponent(reference)}?${query}`,
+  );
 }

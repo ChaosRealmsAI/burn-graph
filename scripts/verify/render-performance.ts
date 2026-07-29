@@ -117,7 +117,7 @@ try {
       samples.push({ format, mode: "cached", ...cached });
       const stopper = new BurnGraphService(root);
       try {
-        stopper.cancelRun(runId);
+        stopper.cancelRun(runId, `render-performance-${format}-${index + 1}`);
       } finally {
         stopper.close();
       }

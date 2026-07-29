@@ -10,7 +10,7 @@ unlocks and returns successors across parallel nodes and multiple graphs.
 With Bun 1.2.17 or newer, installation is one local package command:
 
 ```bash
-bun add --global ./burn-graph-0.1.0-dev.4.tgz
+bun add --global ./burn-graph-0.1.0-dev.5.tgz
 burn-graph --version
 ```
 

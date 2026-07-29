@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "id": "selfhost-dev5-hierarchy",
+  "title": "Deliver dev.5 hierarchical Runs",
+  "goal": "Ship a backward-compatible GraphSpec v2 and a bounded parent-child Run tree through the existing guarded Assignment loop.",
+  "revision": 1,
+  "maxActive": 2,
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "title": "Start dev.5",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "contract-tests"
+        },
+        {
+          "to": "migration-oracle"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev5"
+      ]
+    },
+    {
+      "id": "contract-tests",
+      "type": "task",
+      "title": "Make v2 authoring contracts executable",
+      "prompt": {
+        "objective": "Add focused tests that define GraphSpec v2 prompt, Subgraph, hierarchy bound, and v1 compatibility behavior before implementation.",
+        "instructions": [
+          "Keep the public envelope at schema version 1.",
+          "Test normalized v1 defaults and strict v2 rejection before mutating runtime state.",
+          "Use only deterministic project-local fixtures."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/bdd/S05-hierarchical-runtime.feature",
+          "../privacy/slices/S08-v2-authoring-migration/slice.md",
+          "../privacy/slices/S08-v2-authoring-migration/versions/0.1.0-dev.5/plan.md",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/validator.ts",
+          "tests/unit/validator.test.ts"
+        ],
+        "doneWhen": [
+          "Known-valid v1 and v2 fixtures are explicit.",
+          "Invalid mode, child, route, depth, width, and ancestry inputs have stable expected errors.",
+          "The new contract tests fail against the dev.4 implementation for the intended reason."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "authoring-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev5",
+        "contract",
+        "test"
+      ]
+    },
+    {
+      "id": "migration-oracle",
+      "type": "task",
+      "title": "Build migration preservation oracle",
+      "prompt": {
+        "objective": "Create a copied dev.4 SQLite fixture and a projection oracle proving migration preserves all historical public facts while backfilling root hierarchy metadata.",
+        "instructions": [
+          "Do not rewrite historical GraphSpec JSON, events, attempts, assignments, or revisions.",
+          "Seed a known-bad partial migration case that must roll back.",
+          "Keep raw runtime databases under ignored test temp paths."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "../privacy/pocs/P01-hierarchy-migration/poc.md",
+          "packages/core/src/storage.ts",
+          "packages/core/src/service.ts",
+          "tests/integration/service.test.ts",
+          "tests/helpers/fixtures.ts"
+        ],
+        "doneWhen": [
+          "Pre/post public projections are byte-equivalent where v1 exposed them.",
+          "Every old Run becomes its own depth-zero root with normal priority.",
+          "Migration is idempotent and a known-bad transaction leaves no partial schema data."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "authoring-join"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev5",
+        "migration",
+        "test"
+      ]
+    },
+    {
+      "id": "authoring-join",
+      "type": "join",
+      "title": "Converge authoring oracles",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "authoring-runtime"
+        }
+      ],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev5"
+      ]
+    },
+    {
+      "id": "authoring-runtime",
+      "type": "task",
+      "title": "Implement v2 contracts and migration",
+      "prompt": {
+        "objective": "Implement the smallest GraphSpec v2 and SQLite migration slice that makes the locked authoring and preservation oracles pass.",
+        "instructions": [
+          "Normalize v1 without rewriting stored documents.",
+          "Use one migration ledger and one immediate transaction.",
+          "Replace root-only live uniqueness without weakening parent-child pinning."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "packages/core/src/contracts.ts",
+          "packages/core/src/validator.ts",
+          "packages/core/src/storage.ts",
+          "docs/graph-spec.md"
+        ],
+        "doneWhen": [
+          "v1 and v2 validate and persist as immutable revisions.",
+          "Hierarchy columns and link storage satisfy the migration oracle.",
+          "Focused authoring and migration tests pass."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "hierarchy-tests"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev5",
+        "implement"
+      ]
+    },
+    {
+      "id": "hierarchy-tests",
+      "type": "task",
+      "title": "Make hierarchy execution contracts executable",
+      "prompt": {
+        "objective": "Add integration and CLI tests for static and dynamic children, replay, ancestor convergence, failure, cancellation, pause, resume, restart, and hierarchy bounds.",
+        "instructions": [
+          "Drive only public service or CLI contracts.",
+          "Assert child-to-ancestor revision order and no duplicate child creation.",
+          "Keep lifecycle process safety compatible with future Gate execution."
+        ],
+        "mustRead": [
+          "../privacy/user-paths/UP06-hierarchical-run.md",
+          "../privacy/bdd/S05-hierarchical-runtime.feature",
+          "../privacy/slices/S09-hierarchy-execution/slice.md",
+          "../privacy/slices/S09-hierarchy-execution/versions/0.1.0-dev.5/plan.md",
+          "packages/core/src/service.ts",
+          "apps/cli/src/index.ts",
+          "tests/integration/service.test.ts",
+          "tests/e2e/cli-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "A two-level tree has overlapping child work and converges.",
+          "Equivalent dynamic replay is inert and conflicting replay is rejected.",
+          "Pause, resume, cancellation, restart, and bounds have deterministic assertions.",
+          "The new tests fail against the pre-hierarchy runtime."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "hierarchy-runtime"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev5",
+        "test"
+      ]
+    },
+    {
+      "id": "hierarchy-runtime",
+      "type": "task",
+      "title": "Implement parent-child Run convergence",
+      "prompt": {
+        "objective": "Implement atomic static and dynamic Subgraph execution, hierarchy-aware scheduling, ancestor settlement, replay, and safe lifecycle propagation.",
+        "instructions": [
+          "AI work remains reachable only through opaque Assignments.",
+          "One mutation settles descendants and ancestors atomically.",
+          "Never launch AI or identify processes by broad name."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "packages/core/src/service.ts",
+          "packages/core/src/storage.ts",
+          "packages/core/src/contracts.ts",
+          "tests/integration"
+        ],
+        "doneWhen": [
+          "Static and dynamic child sets start atomically.",
+          "Final child completion advances every legal ancestor before returning.",
+          "Scheduling and lifecycle operations respect the whole unfinished tree.",
+          "Focused hierarchy tests pass without regressing v1."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "projection-cli"
+        }
+      ],
+      "maxAttempts": 3,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev5",
+        "implement"
+      ]
+    },
+    {
+      "id": "projection-cli",
+      "type": "task",
+      "title": "Expose bounded tree inspection and rendering",
+      "prompt": {
+        "objective": "Expose folded and depth-bounded tree snapshots through CLI, Mermaid, Viewer, SVG, and PNG from one canonical runtime projection.",
+        "instructions": [
+          "Read-only commands must never mutate runtime state.",
+          "Refuse more than 500 rendered nodes with PROJECTION_LIMIT.",
+          "Preserve every v1 command and default projection."
+        ],
+        "mustRead": [
+          "../privacy/architecture.md",
+          "packages/core/src/mermaid.ts",
+          "apps/cli/src/index.ts",
+          "apps/viewer/src",
+          "packages/render",
+          "tests/e2e/render-workflow.test.ts"
+        ],
+        "doneWhen": [
+          "Folded and expanded CLI and browser surfaces report identical totals.",
+          "Depth and node bounds are enforced.",
+          "A 256-Run folded and 500-node expanded core projection each finish under one second."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "dev5-gate"
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev5",
+        "projection"
+      ]
+    },
+    {
+      "id": "dev5-gate",
+      "type": "decision",
+      "title": "Accept or repair dev.5",
+      "prompt": {
+        "objective": "Route pass only when UP06 and BDD S05 pass from source and isolated dev.5 package with migration, concurrency, projection, and regression evidence.",
+        "instructions": [
+          "Run the complete applicable verification, not only focused tests.",
+          "Seed at least one known-bad migration or duplicate-child case and prove the Gate fails.",
+          "Choose repair for any unresolved product, migration, safety, or packaging blocker."
+        ],
+        "mustRead": [
+          "../privacy/milestones/M05-hierarchical-runtime.md",
+          "../privacy/user-paths/UP06-hierarchical-run.md",
+          "../privacy/bdd/S05-hierarchical-runtime.feature",
+          "../privacy/project.json",
+          "AGENTS.md"
+        ],
+        "doneWhen": [
+          "The route cites exact commands, counts, bounds, and artifact paths.",
+          "No unresolved blocker or unaccepted debt remains."
+        ],
+        "outputSchema": null
+      },
+      "next": [
+        {
+          "to": "end",
+          "route": "pass",
+          "label": "dev.5 verified"
+        },
+        {
+          "to": "hierarchy-runtime",
+          "route": "repair",
+          "label": "repair dev.5",
+          "maxTraversals": 1
+        }
+      ],
+      "maxAttempts": 2,
+      "actorHint": "main-codex",
+      "tags": [
+        "dev5",
+        "gate"
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "title": "dev.5 ready",
+      "prompt": {
+        "objective": "",
+        "instructions": [],
+        "mustRead": [],
+        "doneWhen": [],
+        "outputSchema": null
+      },
+      "next": [],
+      "maxAttempts": 1,
+      "actorHint": null,
+      "tags": [
+        "dev5"
+      ]
+    }
+  ]
+}

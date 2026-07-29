@@ -49,6 +49,11 @@ A different result for an already completed Assignment returns
 `ASSIGNMENT_INPUT_CONFLICT`. Structural Start, Join, Skip, bounded repair, and
 End transitions are automatic.
 
+The dev.5 runtime executes Subgraph but deliberately fails before mutation with
+`SYSTEM_NODE_UNAVAILABLE` when a root or statically reachable child contains
+Gate or Wait. Their GraphSpec shapes can already be validated and registered;
+the Check/Signal System Node Driver becomes executable in dev.6.
+
 Decision completion includes one declared route:
 
 ```json
@@ -70,8 +75,8 @@ Decision route, summary, and evidence.
 | GraphSpec | `graph validate`, `graph apply`, `graph list`, `graph show`, `graph clone` |
 | Run lifecycle | `run start`, `run pause`, `run resume`, `run cancel` |
 | Normal loop | `next`, `current`, `focus`, `done` |
-| Artifact | `render` |
-| Inspection | `inspect overview`, `inspect run`, `inspect node`, `inspect ready`, `inspect mermaid`, `inspect events` |
+| Artifact | `render` with `run` or `tree` scope |
+| Inspection | `inspect overview`, `inspect run`, `inspect tree`, `inspect node`, `inspect ready`, `inspect mermaid`, `inspect events` |
 | Recovery | `recover heartbeat`, `recover checkpoint`, `recover block`, `recover unblock`, `recover release`, `recover fail`, `recover reconcile` |
 | Human Viewer | `viewer start`, `viewer status`, `viewer stop` |
 
@@ -86,23 +91,57 @@ eight relevant Run summaries, and 32 Ready preview rows. `activeRunCount` and
 `remainingReadyCount` preserve the full queue totals; deeper history belongs
 under `inspect`.
 
-Pause prevents new scheduling in that Run while existing Assignment handles
-remain reportable. Lease expiry preserves the Attempt; `next` reconciles it
-automatically, and `recover reconcile [run-or-graph]` exposes the exceptional
-path explicitly.
+Lifecycle mutations require a stable retry key:
+
+```bash
+burn-graph run pause delivery --idempotency-key pause-20260730-1
+burn-graph run resume delivery --actor primary \
+  --idempotency-key resume-20260730-1
+burn-graph run cancel delivery --idempotency-key cancel-20260730-1
+```
+
+Pause suppresses new scheduling across the selected Run subtree while existing
+Assignment handles remain reportable. Completion, release, or lease expiry of
+the last owned Assignment moves the subtree from Pausing to Paused. Equivalent
+key replay returns the first bounded continuation and adds no Assignment,
+revision, or event; using the key for another operation, Run, or resume Actor
+is rejected. Equivalent `done` replay follows the same rule for its Assignment
+handle. `next` reconciles expired leases automatically, and
+`recover reconcile [run-or-graph]` exposes the exceptional path explicitly.
 
 ## Graph artifacts
 
 ```bash
 burn-graph render delivery
 burn-graph render delivery --format png
+burn-graph render delivery --scope tree --depth 1 --limit 500
 ```
 
 `render` reads the canonical Run snapshot and returns bounded metadata for a
 file beneath `.burn-graph/runtime/renders/`. SVG is the default. Metadata
-includes the Run and Graph IDs, runtime revision, source hash, project-relative
-artifact path, dimensions, bytes, SHA-256, cache status, and renderer versions.
-It does not change Run revision or events.
+includes the Run and Graph IDs, runtime revision, scope, projection depth,
+source hash, project-relative artifact path, dimensions, bytes, SHA-256, cache
+status, and renderer versions. It does not change Run revision or events.
+
+`run` scope preserves the original one-Run diagram. `tree` scope reads the same
+canonical hierarchy snapshot as `inspect tree` and the Viewer. Depth zero
+expands the selected Run and shows only its direct children as folded
+status/progress nodes. Hidden descendants contribute to aggregate totals but
+are not enumerated until their parent level is expanded. Every expanded node
+and visible folded Run counts against `--limit`, whose package maximum is 500.
+An oversized request fails with `PROJECTION_LIMIT` before rendering.
+
+```bash
+burn-graph inspect tree delivery --depth 0 --limit 500
+burn-graph inspect tree delivery --depth 1 --limit 500
+burn-graph inspect mermaid delivery --scope tree --depth 1
+```
+
+The tree response includes one immutable projection root, ordered visible Run
+entries, full-tree totals, fold state, direct and descendant totals,
+rendered-node count, event cursor, and Mermaid source. The whole response is
+read under one SQLite snapshot. Read-only projection does not increment a
+revision or append an event.
 
 A cache miss launches a new Chrome-family headless child with an ephemeral
 profile and loopback-only static page. burn-graph stops only that exact child.
@@ -118,6 +157,7 @@ burn-graph graph --help
 burn-graph done --help
 burn-graph help ai-loop
 burn-graph help graph-spec
+burn-graph help lifecycle
 burn-graph help inspect
 burn-graph help render
 burn-graph help recover

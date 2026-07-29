@@ -245,7 +245,7 @@ describe("runtime convergence", () => {
       expect(status(one, "right")).toBe("ready");
       expect(status(two, "right")).toBe("running");
       expect(status(two, "left")).toBe("ready");
-      restarted.pauseRun("graph-one:run");
+      restarted.pauseRun("graph-one:run", "pause-graph-one");
       expect(() =>
         restarted.claim("graph-one:run", "right", "one-right", 60),
       ).toThrow(BurnGraphError);

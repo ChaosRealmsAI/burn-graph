@@ -35,6 +35,11 @@ export function prompt(objective: string): NodeSpec["prompt"] {
     mustRead: [],
     doneWhen: [],
     outputSchema: null,
+    role: "",
+    lockedContracts: [],
+    writablePaths: [],
+    forbidden: [],
+    runtime: [],
   };
 }
 
@@ -279,6 +284,7 @@ export function convergenceGraph(id = "delivery"): GraphSpec {
         type: "task",
         title: "Implement core",
         prompt: {
+          ...prompt(""),
           objective: "Implement the smallest verified core result.",
           instructions: [
             "Read the declared context before changing code.",

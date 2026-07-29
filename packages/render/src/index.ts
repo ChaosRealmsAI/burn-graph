@@ -31,6 +31,7 @@ export type {
   RenderCapability,
   RenderFormat,
   RenderGraphOptions,
+  RenderScope,
 } from "./contracts.ts";
 export {
   discoverRenderBrowser,
@@ -82,12 +83,17 @@ async function renderGraphArtifactInternal(
   options: RenderGraphOptions,
 ): Promise<RenderArtifact> {
   const snapshot = options.snapshot;
+  const scope = options.scope ?? "run";
+  const projectionDepth =
+    scope === "tree" ? (options.projectionDepth ?? 0) : null;
   const sourceHash = sha256(snapshot.mermaid);
   const identity = cacheIdentity({
     projectRoot: options.projectRoot,
     runId: snapshot.summary.runId,
     graphId: snapshot.summary.graphId,
     runtimeRevision: snapshot.summary.runtimeRevision,
+    scope,
+    projectionDepth,
     sourceHash,
     format: options.format,
   });
@@ -115,6 +121,8 @@ async function renderGraphArtifactInternal(
         runId: snapshot.summary.runId,
         graphId: snapshot.summary.graphId,
         runtimeRevision: snapshot.summary.runtimeRevision,
+        scope,
+        projectionDepth,
         sourceHash,
         format: "svg",
       });
