@@ -339,21 +339,22 @@ describe("package-internal graph rendering", () => {
         "--run-id",
         "render-wide:e2e",
       ]);
-      const startedAt = performance.now();
       const rendered = await ok(root, [
         "render",
         "render-wide:e2e",
         "--format",
         "png",
       ]);
-      const elapsedMilliseconds = performance.now() - startedAt;
+      // The 20s cold-render ceiling that used to sit here is the same number
+      // scripts/verify/render-performance.ts enforces as coldMaximumMilliseconds,
+      // over the same operation with p50/p95/max sampling. Here it measured suite
+      // contention and shadowed the owner.
       expect(rendered.data).toMatchObject({
         format: "png",
         cached: false,
       });
       expect(rendered.data.width).toBeLessThanOrEqual(2400);
       expect(rendered.data.height).toBeLessThanOrEqual(1600);
-      expect(elapsedMilliseconds).toBeLessThan(20_000);
     },
     60_000,
   );
