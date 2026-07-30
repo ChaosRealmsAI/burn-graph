@@ -162,12 +162,10 @@ const graph = {
 // it measured suite load instead of the code and failed only when run alongside
 // the rest of the suite. Budgets belong here, with repeatable sampling.
 const wideNodeCount = 500;
-// Each sample gets its own graph because one graph holds one live run, and
-// cancelling to free it is not an option here: `run cancel` returns an unbounded
-// GraphSnapshot (557 KB on this width, 2.1x the CLI output budget). That is
-// tracked as a product defect rather than worked around silently — see
-// privacy/issues. Applying a fresh graph per sample is setup, and setup is not
-// measured.
+// Each sample gets its own graph because one graph holds one live run. Cancel is
+// now measured too: it used to return an unbounded GraphSnapshot (557 KB at this
+// width, past the output budget) and could not be called here at all. I0010
+// bounded it to the summary, so this samples both ends of the lifecycle.
 const buildWideGraph = (index: number) => ({
   schemaVersion: 2,
   id: `control-performance-wide-${index}`,
@@ -271,6 +269,16 @@ try {
         `run.start on a ${wideNodeCount}-node graph returned ${wideAssignments} assignments; the Actor cap is 8`,
       );
     }
+    record(
+      "run.cancel.wide",
+      await invoke(wideRoots[index]!.root, [
+        "run",
+        "cancel",
+        `control-performance-wide-r${index}`,
+        "--idempotency-key",
+        `control-performance-wide-r${index}-cancel`,
+      ]),
+    );
   }
 
   for (let index = 0; index < sampleCount; index += 1) {

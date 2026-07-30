@@ -71,7 +71,13 @@ export function registerExecution(program: Command): void {
       const result = withService((service) =>
         service.pauseRun(reference, options.idempotencyKey),
       );
-      success("run.pause", { ...result.value, replayed: result.replayed }, {
+      // I0010: a lifecycle mutation answers "what is this Run's state now", so it
+      // returns the summary rather than the whole GraphSnapshot. Spreading the
+      // snapshot shipped the full GraphSpec, every node and edge, recent events
+      // and a rendered mermaid string — 542KB at 500 nodes, past this CLI's own
+      // 256KB output budget, for a command whose answer is one status. Callers
+      // that want the graph ask `inspect`, which is what `inspect` is for.
+      success("run.pause", { summary: result.value.summary, replayed: result.replayed }, {
         changes:
           result.changes ?? mutationChange(result),
         nextActions: [
@@ -115,7 +121,13 @@ export function registerExecution(program: Command): void {
       const result = withService((service) =>
         service.cancelRun(reference, options.idempotencyKey),
       );
-      success("run.cancel", { ...result.value, replayed: result.replayed }, {
+      // I0010: a lifecycle mutation answers "what is this Run's state now", so it
+      // returns the summary rather than the whole GraphSnapshot. Spreading the
+      // snapshot shipped the full GraphSpec, every node and edge, recent events
+      // and a rendered mermaid string — 542KB at 500 nodes, past this CLI's own
+      // 256KB output budget, for a command whose answer is one status. Callers
+      // that want the graph ask `inspect`, which is what `inspect` is for.
+      success("run.cancel", { summary: result.value.summary, replayed: result.replayed }, {
         changes:
           result.changes ?? mutationChange(result),
         nextActions: [

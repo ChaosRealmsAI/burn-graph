@@ -133,6 +133,57 @@ afterEach(() => {
 });
 
 describe("public CLI concurrency", () => {
+  // I0010: lifecycle mutations returned a whole GraphSnapshot — summary, the full
+  // GraphSpec, every node, every edge, recent events and a rendered mermaid
+  // string. At 500 nodes that is 557KB, 2.1x the output budget this CLI declares
+  // for itself and a large fraction of an AI caller's context for a command whose
+  // only answer is "the Run is cancelled".
+  //
+  // This is the known-bad case: it fails before the fix and passes after it.
+  test("lifecycle mutations stay inside the output budget at width", async () => {
+    const root = createTestProject();
+    roots.push(root);
+    const service = new BurnGraphService(root);
+    try {
+      service.applyGraph(wideGraph("bounded-cancel", 500));
+    } finally {
+      service.close();
+    }
+
+    const started = await invoke(root, [
+      "run",
+      "start",
+      "bounded-cancel",
+      "--actor",
+      "budget-actor",
+      "--run-id",
+      "bounded-cancel:run",
+    ]);
+    expect(started.exitCode).toBe(0);
+
+    const OUTPUT_BUDGET_BYTES = 256 * 1024;
+    for (const [command, args] of [
+      ["run.pause", ["run", "pause", "bounded-cancel:run", "--idempotency-key", "p1"]],
+      ["run.cancel", ["run", "cancel", "bounded-cancel:run", "--idempotency-key", "c1"]],
+    ] as const) {
+      const result = await invoke(root, args);
+      expect(result.exitCode).toBe(0);
+      const bytes = Buffer.byteLength(result.stdout);
+      expect(
+        bytes,
+        `${command} returned ${bytes} bytes against a ${OUTPUT_BUDGET_BYTES} budget`,
+      ).toBeLessThanOrEqual(OUTPUT_BUDGET_BYTES);
+
+      // Bounded must not mean uninformative: the caller still learns the outcome.
+      const envelope = JSON.parse(result.stdout) as {
+        readonly ok: boolean;
+        readonly data: { readonly summary?: { readonly status?: string } };
+      };
+      expect(envelope.ok).toBe(true);
+      expect(envelope.data.summary?.status).toBeDefined();
+    }
+  });
+
   test("concurrent lifecycle retries share one idempotent mutation", async () => {
     const root = createTestProject();
     roots.push(root);
