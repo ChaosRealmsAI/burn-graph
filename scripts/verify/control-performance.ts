@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { percentile95 } from "./percentile.ts";
 import path from "node:path";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../..");
@@ -51,10 +52,6 @@ function firstAssignment(envelope: AssignmentEnvelope, command: string): string 
   return assignment.assignmentId;
 }
 
-function percentile95(values: readonly number[]): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.ceil(ordered.length * 0.95) - 1] ?? 0;
-}
 
 async function invoke(
   root: string,
