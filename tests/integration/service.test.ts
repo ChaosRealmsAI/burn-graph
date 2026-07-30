@@ -812,19 +812,22 @@ describe("runtime convergence", () => {
     const scheduleService = new BurnGraphService(scheduleRoot);
     try {
       scheduleService.applyGraph(wideGraph("bounded-schedule", 500));
-      const startedAt = performance.now();
       const schedule = scheduleService.startWithAssignments(
         "bounded-schedule",
         "bounded-actor",
         "bounded-schedule:run",
       );
-      const elapsedMs = performance.now() - startedAt;
+      // Bounding is what this test owns, and these four assertions prove it
+      // deterministically: 500 ready nodes collapse to 8 assignments and a
+      // 32-item sample. The wall-clock budget that used to sit here measured
+      // machine load rather than the code — it passed alone and failed inside
+      // the full suite — and now lives in scripts/verify/control-performance.ts
+      // with repeatable p95 sampling.
       expect(schedule.assignments).toHaveLength(8);
       expect(schedule.remainingReadyCount).toBe(492);
       expect(schedule.remainingReady).toHaveLength(32);
       expect(schedule.activeRunCount).toBe(1);
       expect(schedule.runs).toHaveLength(1);
-      expect(elapsedMs).toBeLessThan(1_000);
     } finally {
       scheduleService.close();
       removeTestProject(scheduleRoot);

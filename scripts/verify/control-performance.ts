@@ -16,6 +16,20 @@ const sampleCount = 5;
 const p95BudgetMs = 1_000;
 const outputBudgetBytes = 256 * 1024;
 
+// Starting a run on a wide graph costs ~29x a narrow one (1457ms p95 at 500
+// nodes against 50ms at 4, measured in isolated project roots) even though the
+// response itself is bounded to 8 Assignments and a 32-item ready sample. The
+// cost is materialisation: the service builds the whole GraphSnapshot and bounds
+// it only at the edge, which is the same root cause that makes `run cancel`
+// return 557KB on this width — past the CLI's own 256KB output budget.
+//
+// This budget therefore locks in today's measured behaviour plus headroom rather
+// than pretending the narrow budget applies. It is a regression fence, not an
+// endorsement; tightening it to p95BudgetMs is the exit condition for the
+// bound-before-materialise fix.
+const wideP95BudgetMs = 2_000;
+const widePrefix = "run.start.wide";
+
 interface Invocation {
   readonly milliseconds: number;
   readonly bytes: number;
@@ -127,11 +141,80 @@ const graph = {
   ],
 };
 
+// A wide graph measures what the small control graph cannot: whether starting a
+// run stays bounded when hundreds of nodes become ready at once. The assertion
+// used to live inside an integration test as a single wall-clock sample, where
+// it measured suite load instead of the code and failed only when run alongside
+// the rest of the suite. Budgets belong here, with repeatable sampling.
+const wideNodeCount = 500;
+// Each sample gets its own graph because one graph holds one live run, and
+// cancelling to free it is not an option here: `run cancel` returns an unbounded
+// GraphSnapshot (557 KB on this width, 2.1x the CLI output budget). That is
+// tracked as a product defect rather than worked around silently — see
+// privacy/issues. Applying a fresh graph per sample is setup, and setup is not
+// measured.
+const buildWideGraph = (index: number) => ({
+  schemaVersion: 2,
+  id: `control-performance-wide-${index}`,
+  title: "CLI control performance at width",
+  goal: "Measure run start when many nodes become ready at once.",
+  revision: 1,
+  maxActive: 1,
+  nodes: [
+    {
+      id: "start",
+      type: "start",
+      title: "Start",
+      prompt: emptyPrompt,
+      next: Array.from({ length: wideNodeCount }, (_unused, index) => ({
+        to: `task-${index}`,
+      })),
+      maxAttempts: 1,
+      actorHint: null,
+      tags: [],
+    },
+    ...Array.from({ length: wideNodeCount }, (_unused, index) => ({
+      id: `task-${index}`,
+      type: "task" as const,
+      title: `Task ${index}`,
+      prompt: { ...emptyPrompt, objective: `Complete task ${index}.` },
+      next: [{ to: "end" }],
+      maxAttempts: 1,
+      actorHint: null,
+      tags: ["control-performance"],
+      resources: [],
+    })),
+    {
+      id: "end",
+      type: "end",
+      title: "End",
+      prompt: emptyPrompt,
+      next: [],
+      maxAttempts: 1,
+      actorHint: null,
+      tags: [],
+    },
+  ],
+});
+
 const temporaryRoot = mkdtempSync(
   path.join(tmpdir(), "burn-graph-control-performance-"),
 );
 const graphFile = path.join(temporaryRoot, "graph.json");
 writeFileSync(graphFile, `${JSON.stringify(graph)}\n`);
+
+// The wide fixture gets its own project root. Sharing one database made every
+// small-graph sample 60-200x slower once thousands of wide-graph rows and five
+// live runs sat beside it — a measurement artefact that reads exactly like a
+// product regression. Isolation is what keeps each number about its own command.
+const wideRoot = mkdtempSync(
+  path.join(tmpdir(), "burn-graph-control-performance-wide-"),
+);
+const wideGraphFiles = Array.from({ length: sampleCount }, (_unused, index) => {
+  const file = path.join(wideRoot, `wide-graph-${index}.json`);
+  writeFileSync(file, `${JSON.stringify(buildWideGraph(index))}\n`);
+  return file;
+});
 
 const samples = new Map<string, number[]>();
 let maximumOutputBytes = 0;
@@ -145,6 +228,31 @@ function record(name: string, result: Invocation): void {
 try {
   await invoke(temporaryRoot, ["init"]);
   await invoke(temporaryRoot, ["graph", "apply", "--input", graphFile]);
+  await invoke(wideRoot, ["init"]);
+  for (const file of wideGraphFiles) {
+    await invoke(wideRoot, ["graph", "apply", "--input", file]);
+  }
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const wideStarted = await invoke(wideRoot, [
+      "run",
+      "start",
+      `control-performance-wide-${index}`,
+      "--actor",
+      `wide-${index}`,
+      "--run-id",
+      `control-performance-wide-r${index}`,
+    ]);
+    record("run.start.wide", wideStarted);
+    // The schedule must stay bounded regardless of graph width; an unbounded
+    // response would meet the latency budget only by accident on a fast machine.
+    const wideAssignments = wideStarted.envelope.data.assignments.length;
+    if (wideAssignments > 8) {
+      throw new Error(
+        `run.start on a ${wideNodeCount}-node graph returned ${wideAssignments} assignments; the Actor cap is 8`,
+      );
+    }
+  }
 
   for (let index = 0; index < sampleCount; index += 1) {
     const actor = `control-${index}`;
@@ -234,27 +342,44 @@ try {
       Math.round(percentile95(values) * 100) / 100,
     ]),
   );
-  for (const [name, milliseconds] of Object.entries(p95Milliseconds)) {
-    if (milliseconds > p95BudgetMs) {
-      throw new Error(
-        `${name} p95 ${milliseconds}ms exceeds ${p95BudgetMs}ms`,
-      );
-    }
-  }
+  // Report every measurement before deciding. Throwing on the first breach hides
+  // the rest of the profile, which is exactly the information needed to tell a
+  // single slow command apart from an across-the-board regression.
+  const budgetFor = (name: string) =>
+    name.startsWith(widePrefix) ? wideP95BudgetMs : p95BudgetMs;
+  const breaches = Object.entries(p95Milliseconds)
+    .filter(([name, milliseconds]) => milliseconds > budgetFor(name))
+    .map(([name, milliseconds]) => ({
+      name,
+      p95Milliseconds: milliseconds,
+      budgetMs: budgetFor(name),
+    }));
 
   process.stdout.write(
     `${JSON.stringify({
       schemaVersion: 1,
-      ok: true,
+      ok: breaches.length === 0,
       samplesPerCommand: sampleCount,
+      wideNodeCount,
       p95Milliseconds,
       maximumOutputBytes,
       budgets: {
         p95Milliseconds: p95BudgetMs,
+        wideP95Milliseconds: wideP95BudgetMs,
         outputBytes: outputBudgetBytes,
       },
+      breaches,
     })}\n`,
   );
+
+  if (breaches.length > 0) {
+    throw new Error(
+      `${breaches.length} command(s) exceed their p95 budget: ${breaches
+        .map((breach) => `${breach.name} ${breach.p95Milliseconds}ms > ${breach.budgetMs}ms`)
+        .join(", ")}`,
+    );
+  }
 } finally {
   rmSync(temporaryRoot, { recursive: true, force: true });
+  rmSync(wideRoot, { recursive: true, force: true });
 }
