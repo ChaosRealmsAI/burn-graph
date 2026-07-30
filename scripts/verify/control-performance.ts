@@ -16,19 +16,14 @@ const sampleCount = 5;
 const p95BudgetMs = 1_000;
 const outputBudgetBytes = 256 * 1024;
 
-// Starting a run on a wide graph costs ~29x a narrow one (1457ms p95 at 500
-// nodes against 50ms at 4, measured in isolated project roots) even though the
-// response itself is bounded to 8 Assignments and a 32-item ready sample. The
-// cost is materialisation: the service builds the whole GraphSnapshot and bounds
-// it only at the edge, which is the same root cause that makes `run cancel`
-// return 557KB on this width — past the CLI's own 256KB output budget.
+// Width is held to the same budget as everything else: starting a Run on a
+// 500-node graph measures 493ms p95 against 48ms at 4 nodes, so a 125x wider
+// graph costs ~10x — sub-linear, and inside the shared budget. An earlier
+// reading of 1457ms was a fixture artefact, not the command.
 //
-// This budget therefore locks in today's measured behaviour plus headroom rather
-// than pretending the narrow budget applies. It is a regression fence, not an
-// endorsement; tightening it to p95BudgetMs is the exit condition for the
-// bound-before-materialise fix.
-const wideP95BudgetMs = 2_000;
-const widePrefix = "run.start.wide";
+// Response *size* at width is a separate, real defect and is not fenced here:
+// `run cancel` returns 557KB on this width against a 256KB budget, so the perf
+// script cannot call it at all. That is tracked as I0010.
 
 interface Invocation {
   readonly milliseconds: number;
@@ -207,13 +202,17 @@ writeFileSync(graphFile, `${JSON.stringify(graph)}\n`);
 // small-graph sample 60-200x slower once thousands of wide-graph rows and five
 // live runs sat beside it — a measurement artefact that reads exactly like a
 // product regression. Isolation is what keeps each number about its own command.
-const wideRoot = mkdtempSync(
-  path.join(tmpdir(), "burn-graph-control-performance-wide-"),
-);
-const wideGraphFiles = Array.from({ length: sampleCount }, (_unused, index) => {
-  const file = path.join(wideRoot, `wide-graph-${index}.json`);
+// Every wide sample gets its own project root. Sharing one root made sample N
+// start against a database already holding N*500 nodes, inflating the measured
+// latency ~4.6x (1457ms against the 313ms an isolated start actually costs) and
+// turning the number into a statement about the fixture instead of the command.
+const wideRoots = Array.from({ length: sampleCount }, (_unused, index) => {
+  const root = mkdtempSync(
+    path.join(tmpdir(), `burn-graph-control-performance-wide-${index}-`),
+  );
+  const file = path.join(root, "wide-graph.json");
   writeFileSync(file, `${JSON.stringify(buildWideGraph(index))}\n`);
-  return file;
+  return { root, file };
 });
 
 const samples = new Map<string, number[]>();
@@ -228,13 +227,13 @@ function record(name: string, result: Invocation): void {
 try {
   await invoke(temporaryRoot, ["init"]);
   await invoke(temporaryRoot, ["graph", "apply", "--input", graphFile]);
-  await invoke(wideRoot, ["init"]);
-  for (const file of wideGraphFiles) {
-    await invoke(wideRoot, ["graph", "apply", "--input", file]);
+  for (const { root, file } of wideRoots) {
+    await invoke(root, ["init"]);
+    await invoke(root, ["graph", "apply", "--input", file]);
   }
 
   for (let index = 0; index < sampleCount; index += 1) {
-    const wideStarted = await invoke(wideRoot, [
+    const wideStarted = await invoke(wideRoots[index]!.root, [
       "run",
       "start",
       `control-performance-wide-${index}`,
@@ -345,14 +344,12 @@ try {
   // Report every measurement before deciding. Throwing on the first breach hides
   // the rest of the profile, which is exactly the information needed to tell a
   // single slow command apart from an across-the-board regression.
-  const budgetFor = (name: string) =>
-    name.startsWith(widePrefix) ? wideP95BudgetMs : p95BudgetMs;
   const breaches = Object.entries(p95Milliseconds)
-    .filter(([name, milliseconds]) => milliseconds > budgetFor(name))
+    .filter(([, milliseconds]) => milliseconds > p95BudgetMs)
     .map(([name, milliseconds]) => ({
       name,
       p95Milliseconds: milliseconds,
-      budgetMs: budgetFor(name),
+      budgetMs: p95BudgetMs,
     }));
 
   process.stdout.write(
@@ -365,7 +362,6 @@ try {
       maximumOutputBytes,
       budgets: {
         p95Milliseconds: p95BudgetMs,
-        wideP95Milliseconds: wideP95BudgetMs,
         outputBytes: outputBudgetBytes,
       },
       breaches,
@@ -381,5 +377,7 @@ try {
   }
 } finally {
   rmSync(temporaryRoot, { recursive: true, force: true });
-  rmSync(wideRoot, { recursive: true, force: true });
+  for (const { root } of wideRoots) {
+    rmSync(root, { recursive: true, force: true });
+  }
 }

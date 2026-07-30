@@ -32,7 +32,6 @@ import {
   type PortfolioRun,
   type ProjectConfig,
   type ReadyWork,
-  type RunTreeEntry,
   type RuntimeChange,
   type RuntimeEdge,
   type RuntimeNode,
@@ -43,13 +42,13 @@ import {
   type WorkSchedule,
 } from "./contracts.ts";
 import { gateResources, validateCheckSpec } from "./gate.ts";
+import { GraphAuthoring } from "./service-authoring.ts";
+import { RunProjection } from "./service-projection.ts";
 import { deriveRuntimeMetrics } from "./metrics.ts";
 import { renderMermaid, renderTreeMermaid } from "./mermaid.ts";
 import {
   discoverProjectRoot,
   readProjectConfig,
-  writeCheckSpec,
-  writeGraphSpec,
 } from "./project.ts";
 import {
   json,
@@ -68,7 +67,6 @@ import {
 import { BurnGraphDatabase } from "./storage.ts";
 import {
   recoverTemplateTransactions,
-  TemplateRegistry,
 } from "./template-service.ts";
 import {
   loopBodyNodeIds,
@@ -187,6 +185,27 @@ export class BurnGraphServiceBase {
     this.config = readProjectConfig(this.root);
     this.database = new BurnGraphDatabase(this.root);
     this.now = options.now ?? (() => new Date());
+    this.authoring = new GraphAuthoring({
+      root: this.root,
+      config: this.config,
+      database: this.database,
+      timestamp: () => this.timestamp(),
+      loadGraph: (graphId, revision) => this.loadGraph(graphId, revision),
+      loadCheck: (checkId, revision) => this.loadCheck(checkId, revision),
+      summaryForRun: (runId) => this.summaryForRun(runId),
+      tryResolveRun: (reference) => this.tryResolveRun(reference),
+    });
+    this.projection = new RunProjection({
+      config: this.config,
+      database: this.database,
+      timestamp: () => this.timestamp(),
+      loadGraph: (graphId, revision) => this.loadGraph(graphId, revision),
+      resolveRun: (reference) => this.resolveRun(reference),
+      summaryForRun: (runId) => this.summaryForRun(runId),
+      nodesForRun: (runId, spec) => this.nodesForRun(runId, spec),
+      edgesForRun: (runId) => this.edgesForRun(runId),
+      recentEventsForRun: (runId, limit) => this.recentEventsForRun(runId, limit),
+    });
     recoverTemplateTransactions(this.root, this.database);
   }
 
@@ -194,136 +213,23 @@ export class BurnGraphServiceBase {
     this.database.close();
   }
 
+  // Authoring lives in GraphAuthoring; these delegates keep the public service
+  // surface unchanged for every existing caller.
+  private readonly authoring: GraphAuthoring;
+  private readonly projection: RunProjection;
+
   validateGraph(input: unknown): GraphSpec {
-    return validateGraphSpec(input).spec;
+    return this.authoring.validateGraph(input);
   }
 
   applyGraph(input: unknown): GraphSpec {
-    const validated = validateGraphSpec(input);
-    const spec = validated.spec;
-    this.validateCheckReferences(spec);
-    this.validateHierarchyReferences(spec);
-    const at = this.timestamp();
-    this.database.immediate(() => {
-      const latest = this.database.db
-        .query(
-          `SELECT revision
-             FROM graph_specs
-            WHERE graph_id = ?
-            ORDER BY revision DESC
-            LIMIT 1`,
-        )
-        .get(spec.id) as Row | null;
-      if (latest && numberValue(latest, "revision") >= spec.revision) {
-        throw new BurnGraphError(
-          "STALE_GRAPH_REVISION",
-          `Graph ${spec.id} already has revision ${numberValue(latest, "revision")}`,
-          true,
-          { submittedRevision: spec.revision },
-        );
-      }
-      this.database.db
-        .query(
-          `INSERT INTO graph_specs (
-             graph_id, revision, document_json, created_at
-           ) VALUES (?, ?, ?, ?)`,
-        )
-        .run(spec.id, spec.revision, json(spec), at);
-    });
-    try {
-      writeGraphSpec(this.root, spec);
-    } catch (error) {
-      this.database.immediate(() => {
-        this.database.db
-          .query(
-            `DELETE FROM graph_specs
-              WHERE graph_id = ? AND revision = ?`,
-          )
-          .run(spec.id, spec.revision);
-      });
-      throw error;
-    }
-    return spec;
+    return this.authoring.applyGraph(input);
   }
 
   instantiateTemplate(
     request: TemplateInstantiationRequest,
   ): TemplateInstantiationReceipt {
-    return new TemplateRegistry({
-      root: this.root,
-      database: this.database,
-      timestamp: () => this.timestamp(),
-      validateGraph: (input) => this.validateGraph(input),
-      validateReferences: (spec) => {
-        this.validateCheckReferences(spec);
-        this.validateHierarchyReferences(spec);
-      },
-    }).instantiate(request);
-  }
-
-  private validateHierarchyReferences(spec: GraphSpec): void {
-    if (spec.schemaVersion !== 2) return;
-
-    let descendantCount = 0;
-    const visit = (
-      current: GraphSpec,
-      ancestors: ReadonlySet<string>,
-      depth: number,
-    ): void => {
-      for (const node of current.nodes) {
-        if (node.type !== "subgraph" || node.mode !== "static") continue;
-        for (const child of node.children ?? []) {
-          descendantCount += 1;
-          if (depth + 1 > this.config.maxHierarchyDepth) {
-            throw new BurnGraphError(
-              "HIERARCHY_LIMIT",
-              `Graph ${spec.id} exceeds hierarchy depth ${this.config.maxHierarchyDepth}`,
-              false,
-              {
-                graphId: spec.id,
-                depth: depth + 1,
-                limit: this.config.maxHierarchyDepth,
-              },
-            );
-          }
-          if (descendantCount > this.config.maxUnfinishedDescendants) {
-            throw new BurnGraphError(
-              "HIERARCHY_LIMIT",
-              `Graph ${spec.id} exceeds ${this.config.maxUnfinishedDescendants} static descendants`,
-              false,
-              {
-                graphId: spec.id,
-                descendants: descendantCount,
-                limit: this.config.maxUnfinishedDescendants,
-              },
-            );
-          }
-          if (ancestors.has(child.graphId)) {
-            throw new BurnGraphError(
-              "HIERARCHY_CYCLE",
-              `Graph ${child.graphId} repeats in a static ancestry chain`,
-              false,
-              {
-                graphId: child.graphId,
-                parentGraphId: current.id,
-                nodeId: node.id,
-              },
-            );
-          }
-          const childSpec = this.loadGraph(
-            child.graphId,
-            child.revision,
-          ).spec;
-          visit(
-            childSpec,
-            new Set([...ancestors, child.graphId]),
-            depth + 1,
-          );
-        }
-      }
-    };
-
-    visit(spec, new Set([spec.id]), 0);
+    return this.authoring.instantiateTemplate(request);
   }
 
   listGraphs(): readonly {
@@ -333,137 +239,36 @@ export class BurnGraphServiceBase {
     readonly revision: number;
     readonly latestRun: GraphSummary | null;
   }[] {
-    return this.database.read(() => {
-      const rows = this.database.db
-        .query(
-          `SELECT s.graph_id, s.revision, s.document_json
-             FROM graph_specs s
-             JOIN (
-               SELECT graph_id, MAX(revision) AS revision
-                 FROM graph_specs
-                GROUP BY graph_id
-             ) latest
-               ON latest.graph_id = s.graph_id
-              AND latest.revision = s.revision
-            ORDER BY s.graph_id`,
-        )
-        .all() as Row[];
-      return rows.map((row) => {
-        const spec = validateGraphSpec(
-          JSON.parse(stringValue(row, "document_json")),
-        ).spec;
-        const latestRun = this.tryResolveRun(spec.id);
-        return {
-          id: spec.id,
-          title: spec.title,
-          goal: spec.goal,
-          revision: spec.revision,
-          latestRun: latestRun ? this.summaryForRun(latestRun) : null,
-        };
-      });
-    });
+    return this.authoring.listGraphs();
   }
 
   getGraph(graphId: string): GraphSpec {
-    return this.loadGraph(graphId).spec;
+    return this.authoring.getGraph(graphId);
   }
 
   validateCheck(input: unknown): CheckSpec {
-    return validateCheckSpec(input);
+    return this.authoring.validateCheck(input);
   }
 
   applyCheck(input: unknown): CheckSpec {
-    const spec = validateCheckSpec(input);
-    const at = this.timestamp();
-    this.database.immediate(() => {
-      const latest = this.database.db
-        .query(
-          `SELECT revision
-             FROM check_specs
-            WHERE check_id = ?
-            ORDER BY revision DESC
-            LIMIT 1`,
-        )
-        .get(spec.id) as Row | null;
-      if (latest && numberValue(latest, "revision") >= spec.revision) {
-        throw new BurnGraphError(
-          "STALE_CHECK_REVISION",
-          `Check ${spec.id} already has revision ${numberValue(latest, "revision")}`,
-          true,
-          { submittedRevision: spec.revision },
-        );
-      }
-      this.database.db
-        .query(
-          `INSERT INTO check_specs (
-             check_id, revision, document_json, created_at
-           ) VALUES (?, ?, ?, ?)`,
-        )
-        .run(spec.id, spec.revision, json(spec), at);
-    });
-    try {
-      writeCheckSpec(this.root, spec);
-    } catch (error) {
-      this.database.immediate(() => {
-        this.database.db
-          .query(
-            `DELETE FROM check_specs
-              WHERE check_id = ? AND revision = ?`,
-          )
-          .run(spec.id, spec.revision);
-      });
-      throw error;
-    }
-    return spec;
+    return this.authoring.applyCheck(input);
   }
 
   listChecks(): readonly CheckSpec[] {
-    return this.database.read(() => {
-      const rows = this.database.db
-        .query(
-          `SELECT c.document_json
-             FROM check_specs c
-             JOIN (
-               SELECT check_id, MAX(revision) AS revision
-                 FROM check_specs
-                GROUP BY check_id
-             ) latest
-               ON latest.check_id = c.check_id
-              AND latest.revision = c.revision
-            ORDER BY c.check_id`,
-        )
-        .all() as Row[];
-      return rows.map((row) =>
-        validateCheckSpec(JSON.parse(stringValue(row, "document_json"))),
-      );
-    });
+    return this.authoring.listChecks();
   }
 
   getCheck(checkId: string, revision?: number): CheckSpec {
-    return this.loadCheck(checkId, revision);
+    return this.authoring.getCheck(checkId, revision);
   }
 
   cloneGraph(sourceId: string, targetId: string, title?: string): GraphSpec {
-    IdentifierSchema.parse(targetId);
-    const source = this.loadGraph(sourceId).spec;
-    return this.applyGraph({
-      ...source,
-      id: targetId,
-      title: title ?? `${source.title} copy`,
-      revision: 1,
-    });
-  }
-
-  private validateCheckReferences(spec: GraphSpec): void {
-    for (const node of spec.nodes) {
-      if (node.type !== "gate" || !node.check) continue;
-      this.loadCheck(node.check.id, node.check.revision);
-    }
+    return this.authoring.cloneGraph(sourceId, targetId, title);
   }
 
   startRun(graphId: string, requestedRunId?: string): MutationResult<GraphSnapshot> {
     const validated = this.loadGraph(graphId);
-    this.validateCheckReferences(validated.spec);
+    this.authoring.validateCheckReferences(validated.spec);
     const now = this.now();
     const at = now.toISOString();
     const runId = requestedRunId ?? runIdFor(graphId, now);
@@ -578,27 +383,14 @@ export class BurnGraphServiceBase {
     });
   }
 
+  // Read-only projections live in RunProjection; these delegates keep the public
+  // service surface unchanged.
   getSnapshot(reference: string, eventLimit = 100): GraphSnapshot {
-    return this.database.read(() =>
-      this.readSnapshot(reference, eventLimit),
-    );
+    return this.projection.getSnapshot(reference, eventLimit);
   }
 
-  private readSnapshot(reference: string, eventLimit: number): GraphSnapshot {
-    const runId = this.resolveRun(reference);
-    const summary = this.summaryForRun(runId);
-    const spec = this.loadGraph(summary.graphId, summary.specRevision).spec;
-    const nodes = this.nodesForRun(runId, spec);
-    const edges = this.edgesForRun(runId);
-    return {
-      summary,
-      spec,
-      nodes,
-      edges,
-      events:
-        eventLimit === 0 ? [] : this.recentEventsForRun(runId, eventLimit),
-      mermaid: renderMermaid(spec, nodes, edges),
-    };
+  protected readSnapshot(reference: string, eventLimit: number): GraphSnapshot {
+    return this.projection.readSnapshot(reference, eventLimit);
   }
 
   getTreeSnapshot(
@@ -607,275 +399,15 @@ export class BurnGraphServiceBase {
     limit = 500,
     eventLimit = 100,
   ): GraphTreeSnapshot {
-    if (
-      !Number.isInteger(depth) ||
-      depth < 0 ||
-      depth > this.config.maxHierarchyDepth
-    ) {
-      throw new BurnGraphError(
-        "PROJECTION_LIMIT",
-        `Tree depth must be 0-${this.config.maxHierarchyDepth}`,
-        false,
-        { depth, maximumDepth: this.config.maxHierarchyDepth },
-      );
-    }
-    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-      throw new BurnGraphError(
-        "PROJECTION_LIMIT",
-        "Tree projection limit must be 1-500",
-        false,
-        { limit, maximum: 500 },
-      );
-    }
-
-    return this.database.read(() =>
-      this.readTreeSnapshot(reference, depth, limit, eventLimit),
-    );
+    return this.projection.getTreeSnapshot(reference, depth, limit, eventLimit);
   }
 
-  private readTreeSnapshot(
+  inspectNode(
     reference: string,
-    depth: number,
-    limit: number,
-    eventLimit: number,
-  ): GraphTreeSnapshot {
-    const runId = this.resolveRun(reference);
-    const rows = this.database.db
-      .query(
-        `WITH RECURSIVE tree (
-           run_id, parent_run_id, parent_node_id, relative_depth,
-           path, label, trail
-         ) AS (
-           SELECT r.run_id, r.parent_run_id, r.parent_node_id, 0,
-                  '', NULL, ',' || r.run_id || ','
-             FROM runs r
-            WHERE r.run_id = ?
-           UNION ALL
-           SELECT child.run_id, child.parent_run_id, child.parent_node_id,
-                  tree.relative_depth + 1,
-                  tree.path || '/' || printf('%03d', link.position) ||
-                    ':' || child.run_id,
-                  link.label,
-                  tree.trail || child.run_id || ','
-             FROM tree
-             JOIN subgraph_links link
-               ON link.parent_run_id = tree.run_id
-             JOIN runs child
-               ON child.run_id = link.child_run_id
-            WHERE instr(tree.trail, ',' || child.run_id || ',') = 0
-         )
-         SELECT run_id, parent_run_id, parent_node_id, relative_depth,
-                path, label
-           FROM tree
-          ORDER BY path
-          LIMIT ?`,
-      )
-      .all(runId, MAX_TREE_PROJECTION_RUNS + 1) as Row[];
-    if (rows.length > MAX_TREE_PROJECTION_RUNS) {
-      throw new BurnGraphError(
-        "PROJECTION_LIMIT",
-        `Tree ${runId} exceeds the ${MAX_TREE_PROJECTION_RUNS}-Run projection bound`,
-        false,
-        {
-          runId,
-          maximumRuns: MAX_TREE_PROJECTION_RUNS,
-          minimumRuns: MAX_TREE_PROJECTION_RUNS + 1,
-        },
-      );
-    }
-
-    const root = this.readSnapshot(runId, eventLimit);
-    const visibleRows = rows.filter(
-      (row) => numberValue(row, "relative_depth") <= depth + 1,
-    );
-    const summaries = visibleRows.map((row) => {
-      const candidateRunId = stringValue(row, "run_id");
-      return {
-        summary:
-          candidateRunId === runId
-            ? root.summary
-            : this.summaryForRun(candidateRunId),
-        label: optionalString(row, "label"),
-        relativeDepth: numberValue(row, "relative_depth"),
-      };
-    });
-    const byRunId = new Map(
-      rows.map((row) => [
-        stringValue(row, "run_id"),
-        optionalString(row, "parent_run_id"),
-      ]),
-    );
-    const visibleRunIds = new Set(
-      summaries.map((candidate) => candidate.summary.runId),
-    );
-    const directChildren = new Map<string, number>();
-    const descendants = new Map<string, number>();
-    for (const candidate of summaries) {
-      directChildren.set(candidate.summary.runId, 0);
-      descendants.set(candidate.summary.runId, 0);
-    }
-    for (const row of rows) {
-      let parentRunId = optionalString(row, "parent_run_id");
-      if (parentRunId !== null && visibleRunIds.has(parentRunId)) {
-        directChildren.set(
-          parentRunId,
-          (directChildren.get(parentRunId) ?? 0) + 1,
-        );
-      }
-      while (parentRunId !== null && byRunId.has(parentRunId)) {
-        if (visibleRunIds.has(parentRunId)) {
-          descendants.set(
-            parentRunId,
-            (descendants.get(parentRunId) ?? 0) + 1,
-          );
-        }
-        parentRunId = byRunId.get(parentRunId) ?? null;
-      }
-    }
-
-    let renderedNodes = 0;
-    const entries: RunTreeEntry[] = summaries.map((candidate) => {
-      const folded = candidate.relativeDepth > depth;
-      let topology: RunTreeEntry["topology"] = null;
-      if (folded) {
-        renderedNodes += 1;
-      } else if (candidate.summary.runId === runId) {
-        topology = {
-          spec: root.spec,
-          nodes: root.nodes,
-          edges: root.edges,
-        };
-        renderedNodes += root.nodes.length;
-      } else {
-        const spec = this.loadGraph(
-          candidate.summary.graphId,
-          candidate.summary.specRevision,
-        ).spec;
-        const nodes = this.nodesForRun(candidate.summary.runId, spec);
-        const edges = this.edgesForRun(candidate.summary.runId);
-        topology = { spec, nodes, edges };
-        renderedNodes += nodes.length;
-      }
-      return {
-        ...candidate,
-        folded,
-        directChildRuns: directChildren.get(candidate.summary.runId) ?? 0,
-        descendantRuns: descendants.get(candidate.summary.runId) ?? 0,
-        topology,
-      };
-    });
-    if (renderedNodes > limit) {
-      throw new BurnGraphError(
-        "PROJECTION_LIMIT",
-        `Tree ${runId} needs ${renderedNodes} rendered nodes`,
-        false,
-        { runId, limit, renderedNodes, depth },
-      );
-    }
-
-    const latestEvent = numberValue(
-      this.database.db
-        .query(
-          `WITH RECURSIVE tree(run_id) AS (
-             SELECT ?
-             UNION ALL
-             SELECT child.run_id
-               FROM runs child
-               JOIN tree ON child.parent_run_id = tree.run_id
-           )
-           SELECT COALESCE(MAX(events.sequence), 0) AS sequence
-             FROM tree
-             LEFT JOIN events ON events.run_id = tree.run_id`,
-        )
-        .get(runId) as Row,
-      "sequence",
-    );
-    const maximumDepth = rows.reduce(
-      (maximum, row) =>
-        Math.max(maximum, numberValue(row, "relative_depth")),
-      0,
-    );
-    const expandedRuns = rows.filter(
-      (row) => numberValue(row, "relative_depth") <= depth,
-    ).length;
-    return {
-      schemaVersion: 1,
-      root,
-      treeRootRunId: runId,
-      runs: entries,
-      projection: {
-        depth,
-        maximumDepth,
-        limit,
-        totalRuns: rows.length,
-        expandedRuns,
-        foldedRuns: rows.length - expandedRuns,
-        renderedNodes,
-        lastEventSequence: latestEvent,
-        capturedAt: this.timestamp(),
-      },
-      mermaid: renderTreeMermaid(entries),
-    };
-  }
-
-  inspectNode(reference: string, nodeId: string, eventLimit = 50): {
-    readonly summary: GraphSummary;
-    readonly spec: GraphSpec["nodes"][number];
-    readonly runtime: RuntimeNode;
-    readonly incoming: readonly RuntimeEdge[];
-    readonly outgoing: readonly RuntimeEdge[];
-    readonly attempts: readonly {
-      readonly attempt: number;
-      readonly assignmentId: string | null;
-      readonly status: string;
-      readonly actorId: string | null;
-      readonly result: CompletionInput | null;
-      readonly checkpoint: CheckpointInput | null;
-      readonly route: string | null;
-      readonly startedAt: string;
-      readonly finishedAt: string | null;
-    }[];
-    readonly events: readonly GraphEvent[];
-  } {
-    const runId = this.resolveRun(reference);
-    const snapshot = this.getSnapshot(runId, eventLimit);
-    const spec = snapshot.spec.nodes.find((node) => node.id === nodeId);
-    const runtime = snapshot.nodes.find((node) => node.id === nodeId);
-    if (!spec || !runtime) {
-      throw new BurnGraphError("NODE_NOT_FOUND", `Unknown node ${nodeId}`);
-    }
-    const attempts = this.database.db
-      .query(
-        `SELECT attempt, assignment_id, status, actor_id, result_json,
-                checkpoint_json, route, started_at, finished_at
-           FROM attempts
-          WHERE run_id = ? AND node_id = ?
-          ORDER BY attempt`,
-      )
-      .all(runId, nodeId) as Row[];
-    return {
-      summary: snapshot.summary,
-      spec,
-      runtime,
-      incoming: snapshot.edges.filter((edge) => edge.to === nodeId),
-      outgoing: snapshot.edges.filter((edge) => edge.from === nodeId),
-      attempts: attempts.map((row) => ({
-        attempt: numberValue(row, "attempt"),
-        assignmentId: optionalString(row, "assignment_id"),
-        status: stringValue(row, "status"),
-        actorId: optionalString(row, "actor_id"),
-        result: parseJson<CompletionInput>(optionalString(row, "result_json")),
-        checkpoint: parseJson<CheckpointInput>(
-          optionalString(row, "checkpoint_json"),
-        ),
-        route: optionalString(row, "route"),
-        startedAt: stringValue(row, "started_at"),
-        finishedAt: optionalString(row, "finished_at"),
-      })),
-      events: snapshot.events.filter(
-        (event) => event.nodeId === null || event.nodeId === nodeId,
-      ),
-    };
+    nodeId: string,
+    eventLimit = 50,
+  ): ReturnType<RunProjection["inspectNode"]> {
+    return this.projection.inspectNode(reference, nodeId, eventLimit);
   }
 
   pauseRun(
@@ -3952,7 +3484,7 @@ export class BurnGraphServiceBase {
         descriptor.graphId,
         descriptor.revision,
       ).spec;
-      this.validateCheckReferences(childGraph);
+      this.authoring.validateCheckReferences(childGraph);
       requestedDescendants +=
         1 +
         this.assertStaticDescendantsAvoidAncestors(
