@@ -25,7 +25,7 @@ product contract.
   BDD, architecture, milestone, feedback, and Evidence facts belong to the
   independent sibling `../privacy` repository.
 - Existing sibling projects in the V6 workspace are not dependencies. Coupling
-  with `burning` and `burn-subagent` is JSON CLI contracts, never code imports.
+  with `burn-cli` and `burn-subagent` is JSON CLI contracts, never code imports.
 - A code change must not silently edit or commit the privacy repository, and a
   privacy change must not be staged in this repository.
 
