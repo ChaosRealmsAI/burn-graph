@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { percentile95 } from "./percentile.ts";
 import path from "node:path";
 
@@ -15,6 +15,14 @@ const repositoryRoot = path.resolve(import.meta.dir, "../..");
 const cli = path.join(repositoryRoot, "dist", "burn-graph.js");
 const sampleCount = 5;
 const p95BudgetMs = 1_000;
+
+// A latency budget can only judge code on a machine that is not already busy.
+// Measured here, run.start.wide is 493ms idle and 1250-1420ms at load 10.8 on ten
+// cores — a 2.6x inflation that tracks load, not the code. Below that ceiling the
+// numbers are about this product; above it they are about the host, and reporting
+// "budget exceeded" would be the same mistake as a wall-clock assertion inside a
+// test suite: measuring contention and calling it a regression.
+const loadCeilingPerCore = 0.7;
 const outputBudgetBytes = 256 * 1024;
 
 // Width is held to the same budget as everything else: starting a Run on a
@@ -369,6 +377,10 @@ try {
   // Report every measurement before deciding. Throwing on the first breach hides
   // the rest of the profile, which is exactly the information needed to tell a
   // single slow command apart from an across-the-board regression.
+  const cores = os.availableParallelism();
+  const load1 = os.loadavg()[0] ?? 0;
+  const ceiling = cores * loadCeilingPerCore;
+
   const breaches = Object.entries(p95Milliseconds)
     .filter(([, milliseconds]) => milliseconds > p95BudgetMs)
     .map(([name, milliseconds]) => ({
@@ -390,8 +402,19 @@ try {
         outputBytes: outputBudgetBytes,
       },
       breaches,
+      // Recorded so a saved run says whether its numbers were measurable.
+      host: { cores, loadAverage1m: Number(load1.toFixed(2)), loadCeiling: Number(ceiling.toFixed(2)) },
     })}\n`,
   );
+
+  if (load1 > ceiling && breaches.length > 0) {
+    throw new Error(
+      `cannot measure: load ${load1.toFixed(2)} exceeds ${ceiling.toFixed(2)} ` +
+        `(${cores} cores x ${loadCeilingPerCore}). ` +
+        `${breaches.map((b) => `${b.name} ${b.p95Milliseconds}ms`).join(", ")} ` +
+        `is not a verdict on this code — re-run on an idle machine.`,
+    );
+  }
 
   if (breaches.length > 0) {
     throw new Error(
