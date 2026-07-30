@@ -17,11 +17,13 @@ import {
 
 export const STATE_DIRECTORY = ".burn-graph";
 
-function safeChmod(target: string, mode: number): void {
+export function safeChmod(target: string, mode: number): void {
   try {
     chmodSync(target, mode);
   } catch {
     // Filesystems without POSIX permissions still keep the local-only boundary.
+    // Shared with the render cache: two copies of this fallback is how one gets
+    // corrected and the other does not.
   }
 }
 
