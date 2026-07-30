@@ -38,7 +38,15 @@ import {
 } from "./contracts.ts";
 import { gateResources, validateCheckSpec } from "./gate.ts";
 import { GraphAuthoring } from "./service-authoring.ts";
-import { RuntimeInternals } from "./service-internals.ts";
+import {
+  isAssignableNode,
+  isExpired,
+  leaseTime,
+  resourceEligibility,
+  runIdFor,
+  RuntimeInternals,
+  validateLeaseSeconds,
+} from "./service-internals.ts";
 import { RunLifecycle } from "./service-lifecycle.ts";
 import { RunProjection } from "./service-projection.ts";
 import { deriveRuntimeMetrics } from "./metrics.ts";
@@ -114,55 +122,11 @@ type NormalizedChildDescriptor = ChildRunDescriptor & {
   readonly runId: string;
 };
 
-function runIdFor(graphId: string, now: Date): string {
-  return `${graphId}:run:${now.getTime().toString(36)}:${crypto
-    .randomUUID()
-    .slice(0, 8)}`;
-}
 
-function leaseTime(now: Date, seconds: number): string {
-  return new Date(now.getTime() + seconds * 1_000).toISOString();
-}
 
-function validateLeaseSeconds(seconds: number): number {
-  if (!Number.isInteger(seconds) || seconds < 30 || seconds > 86_400) {
-    throw new BurnGraphError(
-      "INVALID_LEASE",
-      "Lease must be an integer between 30 and 86400 seconds",
-    );
-  }
-  return seconds;
-}
 
-function isExpired(value: string | null, now: Date): boolean {
-  return value !== null && new Date(value).getTime() <= now.getTime();
-}
 
-function isAssignableNode(
-  node: GraphSpec["nodes"][number],
-): node is GraphSpec["nodes"][number] & {
-  readonly type: "task" | "decision" | "subgraph";
-} {
-  return (
-    node.type === "task" ||
-    node.type === "decision" ||
-    (node.type === "subgraph" && node.mode === "dynamic")
-  );
-}
 
-function resourceEligibility(
-  resources: readonly string[],
-  lockedResources: ReadonlySet<string>,
-): ReadyWork["eligibility"] {
-  const blockedResources = resources.filter((resource) =>
-    lockedResources.has(resource)
-  );
-  return {
-    eligible: blockedResources.length === 0,
-    reason: blockedResources.length === 0 ? null : "RESOURCE_BUSY",
-    blockedResources,
-  };
-}
 
 export interface BurnGraphServiceOptions {
   readonly now?: () => Date;

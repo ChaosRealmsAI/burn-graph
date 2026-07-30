@@ -115,17 +115,17 @@ type NormalizedChildDescriptor = ChildRunDescriptor & {
   readonly runId: string;
 };
 
-function runIdFor(graphId: string, now: Date): string {
+export function runIdFor(graphId: string, now: Date): string {
   return `${graphId}:run:${now.getTime().toString(36)}:${crypto
     .randomUUID()
     .slice(0, 8)}`;
 }
 
-function leaseTime(now: Date, seconds: number): string {
+export function leaseTime(now: Date, seconds: number): string {
   return new Date(now.getTime() + seconds * 1_000).toISOString();
 }
 
-function validateLeaseSeconds(seconds: number): number {
+export function validateLeaseSeconds(seconds: number): number {
   if (!Number.isInteger(seconds) || seconds < 30 || seconds > 86_400) {
     throw new BurnGraphError(
       "INVALID_LEASE",
@@ -135,11 +135,11 @@ function validateLeaseSeconds(seconds: number): number {
   return seconds;
 }
 
-function isExpired(value: string | null, now: Date): boolean {
+export function isExpired(value: string | null, now: Date): boolean {
   return value !== null && new Date(value).getTime() <= now.getTime();
 }
 
-function isAssignableNode(
+export function isAssignableNode(
   node: GraphSpec["nodes"][number],
 ): node is GraphSpec["nodes"][number] & {
   readonly type: "task" | "decision" | "subgraph";
@@ -151,7 +151,7 @@ function isAssignableNode(
   );
 }
 
-function resourceEligibility(
+export function resourceEligibility(
   resources: readonly string[],
   lockedResources: ReadonlySet<string>,
 ): ReadyWork["eligibility"] {
