@@ -25,10 +25,30 @@ const outputBudgetBytes = 256 * 1024;
 // `run cancel` returns 557KB on this width against a 256KB budget, so the perf
 // script cannot call it at all. That is tracked as I0010.
 
+// Only the fields this script reads are declared. The public envelope carries
+// far more, but typing the whole contract here would duplicate it — and a
+// duplicate contract is the thing that drifts.
+interface AssignmentEnvelope {
+  readonly data: {
+    readonly assignments: readonly { readonly assignmentId: string }[];
+  };
+}
+
 interface Invocation {
   readonly milliseconds: number;
   readonly bytes: number;
-  readonly envelope: any;
+  readonly envelope: AssignmentEnvelope;
+}
+
+// The CLI returning no Assignment is a real failure mode, not a type puzzle: it
+// means the run did not schedule work. Say so where it happens rather than
+// letting an undefined assignmentId surface three commands later.
+function firstAssignment(envelope: AssignmentEnvelope, command: string): string {
+  const assignment = envelope.data.assignments[0];
+  if (!assignment) {
+    throw new Error(`${command} returned no Assignment; nothing to measure`);
+  }
+  return assignment.assignmentId;
 }
 
 function percentile95(values: readonly number[]): number {
@@ -274,7 +294,7 @@ try {
       runId,
     ]);
     record("run.start", started);
-    const first = started.envelope.data.assignments[0];
+    const first = firstAssignment(started.envelope, "run start");
 
     record(
       "current",
@@ -298,7 +318,7 @@ try {
       "done",
       await invoke(
         temporaryRoot,
-        ["done", "--assignment", first.assignmentId, "--input", "-"],
+        ["done", "--assignment", first, "--input", "-"],
         JSON.stringify({ summary: "First task complete.", evidence: [] }),
       ),
     );
@@ -312,10 +332,10 @@ try {
       `${runId}-resume`,
     ]);
     record("run.resume", resumed);
-    const second = resumed.envelope.data.assignments[0];
+    const second = firstAssignment(resumed.envelope, "run resume");
     await invoke(
       temporaryRoot,
-      ["done", "--assignment", second.assignmentId, "--input", "-"],
+      ["done", "--assignment", second, "--input", "-"],
       JSON.stringify({ summary: "Second task complete.", evidence: [] }),
     );
     record(
