@@ -1166,7 +1166,7 @@ describe("hierarchical Run convergence", () => {
     }
   });
 
-  test("keeps five-sample 256-Run and 500-node projection tails under one second", () => {
+  test("folds a 256-Run tree and bounds a 500-node expansion", () => {
     const root = createTestProject();
     const service = new BurnGraphService(root);
     try {
@@ -1197,20 +1197,11 @@ describe("hierarchical Run convergence", () => {
       );
       service.startRun("projection-portfolio", "projection-portfolio-run");
 
-      const foldedSamples = Array.from({ length: 5 }, () => {
-        const startedAt = performance.now();
-        const snapshot = service.getTreeSnapshot(
-          "projection-portfolio-run",
-          0,
-          500,
-          0,
-        );
-        return {
-          milliseconds: performance.now() - startedAt,
-          snapshot,
-        };
-      });
-      const folded = foldedSamples[0]!.snapshot;
+      // Bounding is what this test owns. The 1000ms tail budget that used to sit
+      // here is measured by scripts/verify/hierarchy-performance.ts, over this
+      // exact fixture with p95 across five samples — here it competed with 65
+      // other tests for CPU and duplicated a budget that already has an owner.
+      const folded = service.getTreeSnapshot("projection-portfolio-run", 0, 500, 0);
       expect(folded.projection).toMatchObject({
         totalRuns: 256,
         expandedRuns: 1,
@@ -1218,46 +1209,16 @@ describe("hierarchical Run convergence", () => {
         renderedNodes: 20,
       });
       expect(folded.runs).toHaveLength(16);
-      const foldedDurations = foldedSamples
-        .map((sample) => sample.milliseconds)
-        .sort((left, right) => left - right);
-      expect({
-        p50: foldedDurations[2],
-        p95: foldedDurations[4],
-        max: foldedDurations[4],
-      }).toEqual({
-        p50: expect.any(Number),
-        p95: expect.any(Number),
-        max: expect.any(Number),
-      });
-      expect(foldedDurations[4]).toBeLessThan(1_000);
 
       service.applyGraph(linearGraph("projection-500", 500));
       service.startRun("projection-500", "projection-500-run");
-      const expandedSamples = Array.from({ length: 5 }, () => {
-        const startedAt = performance.now();
-        const snapshot = service.getTreeSnapshot(
-          "projection-500-run",
-          0,
-          500,
-          0,
-        );
-        return {
-          milliseconds: performance.now() - startedAt,
-          snapshot,
-        };
-      });
-      const expanded = expandedSamples[0]!.snapshot;
+      const expanded = service.getTreeSnapshot("projection-500-run", 0, 500, 0);
       expect(expanded.projection).toMatchObject({
         totalRuns: 1,
         expandedRuns: 1,
         foldedRuns: 0,
         renderedNodes: 500,
       });
-      const expandedDurations = expandedSamples
-        .map((sample) => sample.milliseconds)
-        .sort((left, right) => left - right);
-      expect(expandedDurations[4]).toBeLessThan(1_000);
       expectError(
         () => service.getTreeSnapshot("projection-500-run", 0, 499, 0),
         "PROJECTION_LIMIT",
