@@ -28,7 +28,6 @@ import {
 import {
   json,
   numberValue,
-  optionalNumber,
   optionalString,
   parseJson,
   stableJson,
@@ -53,14 +52,24 @@ interface SignalReceipt {
   }[];
 }
 
+import { SystemNodeProjection } from "./system-node-projection.ts";
+
 export class BurnGraphService extends BurnGraphServiceBase {
+  private readonly systemProjection = new SystemNodeProjection({
+    database: this.database,
+    now: () => this.now(),
+    runRow: (runId) => this.internals.runRow(runId),
+    resolveRun: (reference) => this.internals.resolveRun(reference),
+    descendantRunRows: (runId) => this.internals.descendantRunRows(runId),
+  });
+
   advanceSystemNodes(
     reference?: string,
   ): SystemNodeMutation<GateExecutionClaim | null> {
     const now = this.now();
     const at = now.toISOString();
     return this.database.immediate(() => {
-      const runIds = this.systemRunIds(reference);
+      const runIds = this.systemProjection.systemRunIds(reference);
       if (runIds.length === 0) return { value: null, changes: [] };
 
       const expired = this.expiredGateExecution(runIds, at);
@@ -135,7 +144,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
         `Check execution ${executionId} is ${executionStatus}`,
       );
     }
-    const check = this.loadCheck(
+    const check = this.internals.loadCheck(
       stringValue(execution, "check_id"),
       numberValue(execution, "check_revision"),
     );
@@ -160,7 +169,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
       const runId = stringValue(current, "run_id");
       const nodeId = stringValue(current, "node_id");
       const attempt = numberValue(current, "attempt");
-      const node = this.nodeRow(runId, nodeId);
+      const node = this.internals.nodeRow(runId, nodeId);
       if (
         stringValue(node, "status") !== "running" ||
         numberValue(node, "attempt") !== attempt ||
@@ -171,7 +180,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
           `Check execution ${executionId} no longer owns ${runId}/${nodeId}`,
         );
       }
-      const run = this.runRow(runId);
+      const run = this.internals.runRow(runId);
       if (
         stringValue(current, "status") === "stale" ||
         stringValue(run, "status") === "cancelling"
@@ -275,19 +284,19 @@ export class BurnGraphService extends BurnGraphServiceBase {
       }];
       const childChanges: RuntimeChange[] = [];
       if (!blocked) {
-        this.selectDecisionEdge(runId, nodeId, route! , at);
-        const graph = this.graphForRun(runId);
-        this.cascade(graph, runId, at, payloadChanges);
-        this.driveStaticSubgraphs(
+        this.internals.selectDecisionEdge(runId, nodeId, route! , at);
+        const graph = this.internals.graphForRun(runId);
+        this.internals.cascade(graph, runId, at, payloadChanges);
+        this.internals.driveStaticSubgraphs(
           runId,
           at,
           payloadChanges,
           childChanges,
         );
-        this.refreshRunTerminalStatus(runId, at);
+        this.internals.refreshRunTerminalStatus(runId, at);
       }
-      const revision = this.bumpRun(runId, at, undefined, null);
-      const sequence = this.appendEvent({
+      const revision = this.internals.bumpRun(runId, at, undefined, null);
+      const sequence = this.internals.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -309,8 +318,8 @@ export class BurnGraphService extends BurnGraphServiceBase {
       });
       const changes: RuntimeChange[] = [
         ...childChanges,
-        { revision, event: this.getEvent(sequence) },
-        ...this.settleAncestors(runId, at),
+        { revision, event: this.internals.getEvent(sequence) },
+        ...this.internals.settleAncestors(runId, at),
       ];
       return { runId, sequence, changes, stale: false };
     });
@@ -322,51 +331,20 @@ export class BurnGraphService extends BurnGraphServiceBase {
       );
     }
     const quiesced = this.database.immediate(() =>
-      this.quiescePauseContainingRun(mutation.runId, at),
+      this.internals.quiescePauseContainingRun(mutation.runId, at),
     );
     const snapshot = this.getSnapshot(mutation.runId);
     return {
       revision: snapshot.summary.runtimeRevision,
-      event: this.getEvent(mutation.sequence),
+      event: this.internals.getEvent(mutation.sequence),
       value: snapshot,
       changes: [...mutation.changes, ...quiesced],
     };
   }
 
+  // Read-only System Node projections live in SystemNodeProjection.
   listCheckExecutions(reference?: string): readonly CheckExecutionSummary[] {
-    const runIds = this.systemRunIds(reference, true);
-    if (runIds.length === 0) return [];
-    const placeholders = runIds.map(() => "?").join(", ");
-    const rows = this.database.db
-      .query(
-        `SELECT *
-           FROM check_executions
-          WHERE run_id IN (${placeholders})
-          ORDER BY created_at DESC, execution_id`,
-      )
-      .all(...runIds) as Row[];
-    return rows.map((row) => ({
-      executionId: stringValue(row, "execution_id"),
-      runId: stringValue(row, "run_id"),
-      nodeId: stringValue(row, "node_id"),
-      attempt: numberValue(row, "attempt"),
-      check: {
-        id: stringValue(row, "check_id"),
-        revision: numberValue(row, "check_revision"),
-      },
-      status: stringValue(row, "status") as CheckExecutionSummary["status"],
-      leaseExpiresAt: stringValue(row, "lease_expires_at"),
-      classification: optionalString(
-        row,
-        "classification",
-      ) as CheckExecutionSummary["classification"],
-      exitCode: optionalNumber(row, "exit_code"),
-      durationMs: optionalNumber(row, "duration_ms"),
-      byteCount: optionalNumber(row, "byte_count"),
-      digest: optionalString(row, "digest"),
-      createdAt: stringValue(row, "created_at"),
-      finishedAt: optionalString(row, "finished_at"),
-    }));
+    return this.systemProjection.listCheckExecutions(reference);
   }
 
   inspectCheckExecutions(
@@ -374,123 +352,19 @@ export class BurnGraphService extends BurnGraphServiceBase {
     limit = 100,
     maximumOutputBytes = 4_096,
   ): readonly CheckExecutionInspection[] {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-      throw new BurnGraphError(
-        "INVALID_LIMIT",
-        "Execution inspection limit must be 1-100",
-      );
-    }
-    if (
-      !Number.isInteger(maximumOutputBytes) ||
-      maximumOutputBytes < 1 ||
-      maximumOutputBytes > 16_384
-    ) {
-      throw new BurnGraphError(
-        "INVALID_LIMIT",
-        "Execution output limit must be 1-16384 bytes per row",
-      );
-    }
-    const summaries = this.listCheckExecutions(reference).slice(0, limit);
-    return summaries.map((summary) => {
-      const row = this.database.db
-        .query(
-          `SELECT stdout_text, stderr_text
-             FROM check_executions
-            WHERE execution_id = ?`,
-        )
-        .get(summary.executionId) as Row;
-      const stdout = optionalString(row, "stdout_text") ?? "";
-      const stderr = optionalString(row, "stderr_text") ?? "";
-      const stdoutBytes = Buffer.from(stdout);
-      const stderrBytes = Buffer.from(stderr);
-      const retainedStdout = stdoutBytes.subarray(0, maximumOutputBytes);
-      const remaining = maximumOutputBytes - retainedStdout.byteLength;
-      const retainedStderr = stderrBytes.subarray(0, remaining);
-      const retainedBytes =
-        retainedStdout.byteLength + retainedStderr.byteLength;
-      return {
-        ...summary,
-        output: {
-          stdout: retainedStdout.toString(),
-          stderr: retainedStderr.toString(),
-          retainedBytes,
-          truncated:
-            stdoutBytes.byteLength + stderrBytes.byteLength > retainedBytes,
-        },
-      };
-    });
+    return this.systemProjection.inspectCheckExecutions(
+      reference,
+      limit,
+      maximumOutputBytes,
+    );
   }
 
   listWaitSignals(reference?: string): readonly WaitSignalSummary[] {
-    const runIds = this.systemRunIds(reference, true);
-    if (runIds.length === 0) return [];
-    const placeholders = runIds.map(() => "?").join(", ");
-    const now = this.now().getTime();
-    const rows = this.database.db
-      .query(
-        `SELECT *
-           FROM wait_signals
-          WHERE run_id IN (${placeholders})
-          ORDER BY created_at, signal_id`,
-      )
-      .all(...runIds) as Row[];
-    return rows.map((row) => {
-      const deadlineAt = optionalString(row, "deadline_at");
-      const runStatus = stringValue(
-        this.runRow(stringValue(row, "run_id")),
-        "status",
-      );
-      return {
-        signalId: stringValue(row, "signal_id"),
-        runId: stringValue(row, "run_id"),
-        nodeId: stringValue(row, "node_id"),
-        status: stringValue(row, "status") as WaitSignalSummary["status"],
-        routes: parseJson<readonly string[]>(
-          stringValue(row, "routes_json"),
-        ) ?? [],
-        timeoutRoute: optionalString(row, "timeout_route"),
-        deadlineAt,
-        overdue:
-          stringValue(row, "status") === "waiting" &&
-          runStatus === "running" &&
-          deadlineAt !== null &&
-          new Date(deadlineAt).getTime() <= now,
-        resolvedRoute: optionalString(row, "resolved_route"),
-        summary: optionalString(row, "summary"),
-        evidence:
-          parseJson<readonly string[]>(optionalString(row, "evidence_json")) ??
-          [],
-        createdAt: stringValue(row, "created_at"),
-        resolvedAt: optionalString(row, "resolved_at"),
-      };
-    });
+    return this.systemProjection.listWaitSignals(reference);
   }
 
   listResourceLocks(reference?: string): readonly ResourceLockSummary[] {
-    const runIds = this.systemRunIds(reference, true);
-    if (runIds.length === 0) return [];
-    const placeholders = runIds.map(() => "?").join(", ");
-    const rows = this.database.db
-      .query(
-        `SELECT *
-           FROM resource_locks
-          WHERE run_id IN (${placeholders})
-          ORDER BY resource`,
-      )
-      .all(...runIds) as Row[];
-    return rows.map((row) => ({
-      resource: stringValue(row, "resource"),
-      ownerKind: stringValue(
-        row,
-        "owner_kind",
-      ) as ResourceLockSummary["ownerKind"],
-      ownerId: stringValue(row, "owner_id"),
-      rootRunId: stringValue(row, "root_run_id"),
-      runId: stringValue(row, "run_id"),
-      nodeId: stringValue(row, "node_id"),
-      expiresAt: stringValue(row, "expires_at"),
-      createdAt: stringValue(row, "created_at"),
-    }));
+    return this.systemProjection.listResourceLocks(reference);
   }
 
   resolveSignal(
@@ -502,7 +376,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
     const key = IdempotencyKeySchema.parse(idempotencyKey);
     const resolution = validateSignalResolutionInput(input);
     IdentifierSchema.parse(route);
-    const at = this.timestamp();
+    const at = this.internals.timestamp();
 
     const outcome = this.database.immediate(() => {
       const keyOwner = this.database.db
@@ -566,7 +440,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
           { routes },
         );
       }
-      const run = this.runRow(stringValue(row, "run_id"));
+      const run = this.internals.runRow(stringValue(row, "run_id"));
       if (stringValue(run, "status") !== "running") {
         throw new BurnGraphError(
           "RUN_NOT_RUNNING",
@@ -613,11 +487,11 @@ export class BurnGraphService extends BurnGraphServiceBase {
 
     return {
       revision: outcome.receipt.revision,
-      event: this.getEvent(outcome.receipt.eventSequence),
+      event: this.internals.getEvent(outcome.receipt.eventSequence),
       value: this.getSnapshot(outcome.receipt.runId),
       changes: outcome.receipt.changes.map((change) => ({
         revision: change.revision,
-        event: this.getEvent(change.eventSequence),
+        event: this.internals.getEvent(change.eventSequence),
       })),
       replayed: outcome.replayed,
     };
@@ -629,7 +503,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
     const now = this.now();
     const at = now.toISOString();
     return this.database.immediate(() => {
-      const runIds = this.systemRunIds(reference);
+      const runIds = this.systemProjection.systemRunIds(reference);
       const changes: RuntimeChange[] = [];
       while (true) {
         const expired = this.expiredGateExecution(runIds, at);
@@ -651,29 +525,6 @@ export class BurnGraphService extends BurnGraphServiceBase {
       }
       return { value: null, changes };
     });
-  }
-
-  private systemRunIds(
-    reference?: string,
-    includeTerminal = false,
-  ): readonly string[] {
-    if (reference) {
-      const runId = this.resolveRun(reference);
-      return this.descendantRunRows(runId).map((row) =>
-        stringValue(row, "run_id"),
-      );
-    }
-    const rows = this.database.db
-      .query(
-        includeTerminal
-          ? "SELECT run_id FROM runs ORDER BY updated_at DESC, run_id"
-          : `SELECT run_id
-               FROM runs
-              WHERE status IN ('running', 'pausing', 'paused', 'cancelling')
-              ORDER BY updated_at, run_id`,
-      )
-      .all() as Row[];
-    return rows.map((row) => stringValue(row, "run_id"));
   }
 
   private expiredGateExecution(
@@ -744,14 +595,14 @@ export class BurnGraphService extends BurnGraphServiceBase {
   ): readonly RuntimeChange[] {
     const runId = stringValue(row, "run_id");
     const nodeId = stringValue(row, "node_id");
-    const run = this.runRow(runId);
+    const run = this.internals.runRow(runId);
     if (
       stringValue(run, "status") !== "running" ||
-      stringValue(this.nodeRow(runId, nodeId), "status") !== "ready"
+      stringValue(this.internals.nodeRow(runId, nodeId), "status") !== "ready"
     ) {
       return [];
     }
-    const graph = this.graphForRun(runId);
+    const graph = this.internals.graphForRun(runId);
     const node = graph.nodesById.get(nodeId);
     if (!node || node.type !== "wait" || !node.signal) {
       throw new BurnGraphError(
@@ -801,8 +652,8 @@ export class BurnGraphService extends BurnGraphServiceBase {
         at,
         at,
       );
-    const revision = this.bumpRun(runId, at, undefined, null);
-    const sequence = this.appendEvent({
+    const revision = this.internals.bumpRun(runId, at, undefined, null);
+    const sequence = this.internals.appendEvent({
       runId,
       graphId: stringValue(run, "graph_id"),
       nodeId,
@@ -818,7 +669,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
       },
       at,
     });
-    return [{ revision, event: this.getEvent(sequence) }];
+    return [{ revision, event: this.internals.getEvent(sequence) }];
   }
 
   private claimGate(
@@ -828,14 +679,14 @@ export class BurnGraphService extends BurnGraphServiceBase {
   ): SystemNodeMutation<GateExecutionClaim | null> | null {
     const runId = stringValue(row, "run_id");
     const nodeId = stringValue(row, "node_id");
-    const run = this.runRow(runId);
+    const run = this.internals.runRow(runId);
     if (
       stringValue(run, "status") !== "running" ||
-      stringValue(this.nodeRow(runId, nodeId), "status") !== "ready"
+      stringValue(this.internals.nodeRow(runId, nodeId), "status") !== "ready"
     ) {
       return null;
     }
-    const graph = this.graphForRun(runId);
+    const graph = this.internals.graphForRun(runId);
     const node = graph.nodesById.get(nodeId);
     if (!node || node.type !== "gate" || !node.check) {
       throw new BurnGraphError(
@@ -852,7 +703,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
       .get(runId) as Row;
     if (numberValue(active, "count") >= graph.spec.maxActive) return null;
 
-    const check = this.loadCheck(node.check.id, node.check.revision);
+    const check = this.internals.loadCheck(node.check.id, node.check.revision);
     const resources = gateResources(node.resources ?? [], check.resources);
     if (resources.length > 0) {
       const placeholders = resources.map(() => "?").join(", ");
@@ -928,8 +779,8 @@ export class BurnGraphService extends BurnGraphServiceBase {
           at,
         );
     }
-    const revision = this.bumpRun(runId, at, undefined, null);
-    const sequence = this.appendEvent({
+    const revision = this.internals.bumpRun(runId, at, undefined, null);
+    const sequence = this.internals.appendEvent({
       runId,
       graphId: stringValue(run, "graph_id"),
       nodeId,
@@ -955,7 +806,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
         check,
         leaseExpiresAt,
       },
-      changes: [{ revision, event: this.getEvent(sequence) }],
+      changes: [{ revision, event: this.internals.getEvent(sequence) }],
     };
   }
 
@@ -986,11 +837,11 @@ export class BurnGraphService extends BurnGraphServiceBase {
       )
       .run(at, executionId);
     this.releaseGateResources(executionId);
-    const run = this.runRow(runId);
+    const run = this.internals.runRow(runId);
     if (stringValue(run, "status") === "cancelling") {
       return this.finalizeCancellingTree(runId, at);
     }
-    const graph = this.graphForRun(runId);
+    const graph = this.internals.graphForRun(runId);
     const nodeSpec = graph.nodesById.get(nodeId);
     if (!nodeSpec || nodeSpec.type !== "gate") {
       throw new BurnGraphError(
@@ -1015,8 +866,8 @@ export class BurnGraphService extends BurnGraphServiceBase {
             AND attempt = ?`,
       )
       .run(retry ? "ready" : "blocked", at, runId, nodeId, attempt);
-    const revision = this.bumpRun(runId, at, undefined, null);
-    const sequence = this.appendEvent({
+    const revision = this.internals.bumpRun(runId, at, undefined, null);
+    const sequence = this.internals.appendEvent({
       runId,
       graphId: stringValue(run, "graph_id"),
       nodeId,
@@ -1027,7 +878,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
       payload: { executionId, attempt, retry, revision },
       at,
     });
-    return [{ revision, event: this.getEvent(sequence) }];
+    return [{ revision, event: this.internals.getEvent(sequence) }];
   }
 
   private settleWaitSignal(
@@ -1045,7 +896,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
       .query("SELECT status FROM wait_signals WHERE signal_id = ?")
       .get(signalId) as Row | null;
     if (!current || stringValue(current, "status") !== "waiting") return [];
-    const graph = this.graphForRun(runId);
+    const graph = this.internals.graphForRun(runId);
     const node = graph.nodesById.get(nodeId);
     if (!node || node.type !== "wait" || !node.signal) {
       throw new BurnGraphError(
@@ -1098,7 +949,7 @@ export class BurnGraphService extends BurnGraphServiceBase {
             AND attempt = ?`,
       )
       .run(route, json(completion), at, runId, nodeId, attempt);
-    this.selectDecisionEdge(runId, nodeId, route, at);
+    this.internals.selectDecisionEdge(runId, nodeId, route, at);
     const payloadChanges: Array<Record<string, unknown>> = [{
       nodeId,
       status: "done",
@@ -1106,12 +957,12 @@ export class BurnGraphService extends BurnGraphServiceBase {
       attempt,
     }];
     const childChanges: RuntimeChange[] = [];
-    this.cascade(graph, runId, at, payloadChanges);
-    this.driveStaticSubgraphs(runId, at, payloadChanges, childChanges);
-    this.refreshRunTerminalStatus(runId, at);
-    const run = this.runRow(runId);
-    const revision = this.bumpRun(runId, at, undefined, null);
-    const sequence = this.appendEvent({
+    this.internals.cascade(graph, runId, at, payloadChanges);
+    this.internals.driveStaticSubgraphs(runId, at, payloadChanges, childChanges);
+    this.internals.refreshRunTerminalStatus(runId, at);
+    const run = this.internals.runRow(runId);
+    const revision = this.internals.bumpRun(runId, at, undefined, null);
+    const sequence = this.internals.appendEvent({
       runId,
       graphId: stringValue(run, "graph_id"),
       nodeId,
@@ -1128,8 +979,8 @@ export class BurnGraphService extends BurnGraphServiceBase {
     });
     return [
       ...childChanges,
-      { revision, event: this.getEvent(sequence) },
-      ...this.settleAncestors(runId, at),
+      { revision, event: this.internals.getEvent(sequence) },
+      ...this.internals.settleAncestors(runId, at),
     ];
   }
 
@@ -1139,15 +990,15 @@ export class BurnGraphService extends BurnGraphServiceBase {
   ): readonly RuntimeChange[] {
     let scopeRunId = runId;
     for (;;) {
-      const row = this.runRow(scopeRunId);
+      const row = this.internals.runRow(scopeRunId);
       const parentRunId = optionalString(row, "parent_run_id");
       if (parentRunId === null) break;
-      if (stringValue(this.runRow(parentRunId), "status") !== "cancelling") {
+      if (stringValue(this.internals.runRow(parentRunId), "status") !== "cancelling") {
         break;
       }
       scopeRunId = parentRunId;
     }
-    const scopeIds = this.descendantRunRows(scopeRunId)
+    const scopeIds = this.internals.descendantRunRows(scopeRunId)
       .filter((row) => stringValue(row, "status") === "cancelling")
       .map((row) => stringValue(row, "run_id"));
     if (scopeIds.length === 0) return [];
@@ -1209,10 +1060,10 @@ export class BurnGraphService extends BurnGraphServiceBase {
         )
         .run(at, affectedRunId);
       const revision = numberValue(
-        this.runRow(affectedRunId),
+        this.internals.runRow(affectedRunId),
         "runtime_revision",
       );
-      const sequence = this.appendEvent({
+      const sequence = this.internals.appendEvent({
         runId: affectedRunId,
         graphId: stringValue(row, "graph_id"),
         nodeId: null,
@@ -1221,9 +1072,9 @@ export class BurnGraphService extends BurnGraphServiceBase {
         payload: { scopeRunId, revision },
         at,
       });
-      changes.push({ revision, event: this.getEvent(sequence) });
+      changes.push({ revision, event: this.internals.getEvent(sequence) });
     }
-    return [...changes, ...this.settleAncestors(scopeRunId, at)];
+    return [...changes, ...this.internals.settleAncestors(scopeRunId, at)];
   }
 
 }

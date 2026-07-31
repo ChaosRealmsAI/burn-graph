@@ -7,13 +7,22 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
+import { percentile95 } from "./percentile.ts";
 import path from "node:path";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../..");
 const cli = path.join(repositoryRoot, "dist", "burn-graph.js");
 const sampleCount = 5;
 const p95BudgetMs = 1_000;
+
+// A latency budget can only judge code on a machine that is not already busy.
+// Measured here, run.start.wide is 493ms idle and 1250-1420ms at load 10.8 on ten
+// cores — a 2.6x inflation that tracks load, not the code. Below that ceiling the
+// numbers are about this product; above it they are about the host, and reporting
+// "budget exceeded" would be the same mistake as a wall-clock assertion inside a
+// test suite: measuring contention and calling it a regression.
+const loadCeilingPerCore = 0.7;
 const outputBudgetBytes = 256 * 1024;
 
 // Width is held to the same budget as everything else: starting a Run on a
@@ -51,10 +60,6 @@ function firstAssignment(envelope: AssignmentEnvelope, command: string): string 
   return assignment.assignmentId;
 }
 
-function percentile95(values: readonly number[]): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.ceil(ordered.length * 0.95) - 1] ?? 0;
-}
 
 async function invoke(
   root: string,
@@ -162,12 +167,10 @@ const graph = {
 // it measured suite load instead of the code and failed only when run alongside
 // the rest of the suite. Budgets belong here, with repeatable sampling.
 const wideNodeCount = 500;
-// Each sample gets its own graph because one graph holds one live run, and
-// cancelling to free it is not an option here: `run cancel` returns an unbounded
-// GraphSnapshot (557 KB on this width, 2.1x the CLI output budget). That is
-// tracked as a product defect rather than worked around silently — see
-// privacy/issues. Applying a fresh graph per sample is setup, and setup is not
-// measured.
+// Each sample gets its own graph because one graph holds one live run. Cancel is
+// now measured too: it used to return an unbounded GraphSnapshot (557 KB at this
+// width, past the output budget) and could not be called here at all. I0010
+// bounded it to the summary, so this samples both ends of the lifecycle.
 const buildWideGraph = (index: number) => ({
   schemaVersion: 2,
   id: `control-performance-wide-${index}`,
@@ -281,6 +284,16 @@ try {
         `run.start on a ${wideNodeCount}-node graph returned ${wideAssignments} assignments; the Actor cap is 8`,
       );
     }
+    record(
+      "run.cancel.wide",
+      await invoke(wideRoots[index]!.root, [
+        "run",
+        "cancel",
+        `control-performance-wide-r${index}`,
+        "--idempotency-key",
+        `control-performance-wide-r${index}-cancel`,
+      ]),
+    );
   }
 
   for (let index = 0; index < sampleCount; index += 1) {
@@ -379,6 +392,10 @@ try {
   // Report every measurement before deciding. Throwing on the first breach hides
   // the rest of the profile, which is exactly the information needed to tell a
   // single slow command apart from an across-the-board regression.
+  const cores = os.availableParallelism();
+  const load1 = os.loadavg()[0] ?? 0;
+  const ceiling = cores * loadCeilingPerCore;
+
   const breaches = Object.entries(p95Milliseconds)
     .filter(([, milliseconds]) => milliseconds > p95BudgetMs)
     .map(([name, milliseconds]) => ({
@@ -400,8 +417,19 @@ try {
         outputBytes: outputBudgetBytes,
       },
       breaches,
+      // Recorded so a saved run says whether its numbers were measurable.
+      host: { cores, loadAverage1m: Number(load1.toFixed(2)), loadCeiling: Number(ceiling.toFixed(2)) },
     })}\n`,
   );
+
+  if (load1 > ceiling && breaches.length > 0) {
+    throw new Error(
+      `cannot measure: load ${load1.toFixed(2)} exceeds ${ceiling.toFixed(2)} ` +
+        `(${cores} cores x ${loadCeilingPerCore}). ` +
+        `${breaches.map((b) => `${b.name} ${b.p95Milliseconds}ms`).join(", ")} ` +
+        `is not a verdict on this code — re-run on an idle machine.`,
+    );
+  }
 
   if (breaches.length > 0) {
     throw new Error(

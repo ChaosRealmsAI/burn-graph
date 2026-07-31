@@ -3,6 +3,7 @@
 // Notes: Setup is excluded; thresholds are local regression limits, not benchmarks.
 
 import { mkdtempSync, rmSync } from "node:fs";
+import { percentile95 } from "./percentile.ts";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -18,10 +19,6 @@ const INSPECT_P95_BUDGET_MS = 1_000;
 const SCHEDULE_P95_BUDGET_MS = 1_000;
 const OUTPUT_BUDGET_BYTES = 256 * 1024;
 
-function percentile95(values: readonly number[]): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.ceil(ordered.length * 0.95) - 1] ?? 0;
-}
 
 function graph(id: string): GraphSpec {
   const emptyPrompt = {

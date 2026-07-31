@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { safeChmod } from "@burn-graph/core";
 
 import { BurnGraphError, STATE_DIRECTORY } from "@burn-graph/core";
 import {
@@ -49,13 +50,6 @@ interface StoredArtifact extends Omit<RenderArtifact, "cached"> {
   readonly cached: false;
 }
 
-function safeChmod(target: string, mode: number): void {
-  try {
-    chmodSync(target, mode);
-  } catch {
-    // Non-POSIX filesystems still retain the project-local storage boundary.
-  }
-}
 
 function runSlug(runId: string): string {
   const prefix = runId.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 64);

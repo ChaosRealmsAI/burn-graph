@@ -5,7 +5,6 @@ import {
   CheckpointInputSchema,
   CompletionInputSchema,
   DynamicSubgraphOutputSchema,
-  GraphStatusSchema,
   IdempotencyKeySchema,
   IdentifierSchema,
   MAX_ACTOR_ASSIGNMENT_BYTES,
@@ -14,15 +13,12 @@ import {
   type ActorWork,
   type AssignmentPacket,
   type CheckSpec,
-  type CheckpointInput,
   type ChildRunDescriptor,
   type CompletionInput,
   type CompletionContinuation,
-  type GraphCounts,
   type GraphEvent,
   type GraphSnapshot,
   type GraphSpec,
-  type GraphStatus,
   type GraphSummary,
   type GraphTreeSnapshot,
   type IdempotentMutationResult,
@@ -34,7 +30,6 @@ import {
   type ProjectConfig,
   type ReadyWork,
   type RuntimeChange,
-  type RuntimeEdge,
   type RuntimeNode,
   type RuntimeMetrics,
   type RunPriority,
@@ -44,6 +39,16 @@ import {
 } from "./contracts.ts";
 import { gateResources, validateCheckSpec } from "./gate.ts";
 import { GraphAuthoring } from "./service-authoring.ts";
+import {
+  isAssignableNode,
+  isExpired,
+  leaseTime,
+  resourceEligibility,
+  runIdFor,
+  RuntimeInternals,
+  validateLeaseSeconds,
+} from "./service-internals.ts";
+import { RunLifecycle } from "./service-lifecycle.ts";
 import { RunProjection } from "./service-projection.ts";
 import { deriveRuntimeMetrics } from "./metrics.ts";
 import { renderMermaid, renderTreeMermaid } from "./mermaid.ts";
@@ -57,7 +62,6 @@ import {
   optionalNumber,
   optionalString,
   parseJson,
-  stableJson,
   stringValue,
   type Row,
 } from "./sql.ts";
@@ -70,9 +74,7 @@ import {
   recoverTemplateTransactions,
 } from "./template-service.ts";
 import {
-  loopBodyNodeIds,
   validateGraphSpec,
-  type GraphEdgeRef,
   type ValidatedGraph,
 } from "./validator.ts";
 
@@ -127,55 +129,11 @@ type NormalizedChildDescriptor = ChildRunDescriptor & {
   readonly runId: string;
 };
 
-function runIdFor(graphId: string, now: Date): string {
-  return `${graphId}:run:${now.getTime().toString(36)}:${crypto
-    .randomUUID()
-    .slice(0, 8)}`;
-}
 
-function leaseTime(now: Date, seconds: number): string {
-  return new Date(now.getTime() + seconds * 1_000).toISOString();
-}
 
-function validateLeaseSeconds(seconds: number): number {
-  if (!Number.isInteger(seconds) || seconds < 30 || seconds > 86_400) {
-    throw new BurnGraphError(
-      "INVALID_LEASE",
-      "Lease must be an integer between 30 and 86400 seconds",
-    );
-  }
-  return seconds;
-}
 
-function isExpired(value: string | null, now: Date): boolean {
-  return value !== null && new Date(value).getTime() <= now.getTime();
-}
 
-function isAssignableNode(
-  node: GraphSpec["nodes"][number],
-): node is GraphSpec["nodes"][number] & {
-  readonly type: "task" | "decision" | "subgraph";
-} {
-  return (
-    node.type === "task" ||
-    node.type === "decision" ||
-    (node.type === "subgraph" && node.mode === "dynamic")
-  );
-}
 
-function resourceEligibility(
-  resources: readonly string[],
-  lockedResources: ReadonlySet<string>,
-): ReadyWork["eligibility"] {
-  const blockedResources = resources.filter((resource) =>
-    lockedResources.has(resource)
-  );
-  return {
-    eligible: blockedResources.length === 0,
-    reason: blockedResources.length === 0 ? null : "RESOURCE_BUSY",
-    blockedResources,
-  };
-}
 
 export interface BurnGraphServiceOptions {
   readonly now?: () => Date;
@@ -196,22 +154,44 @@ export class BurnGraphServiceBase {
       root: this.root,
       config: this.config,
       database: this.database,
-      timestamp: () => this.timestamp(),
-      loadGraph: (graphId, revision) => this.loadGraph(graphId, revision),
-      loadCheck: (checkId, revision) => this.loadCheck(checkId, revision),
-      summaryForRun: (runId) => this.summaryForRun(runId),
-      tryResolveRun: (reference) => this.tryResolveRun(reference),
+      timestamp: () => this.internals.timestamp(),
+      loadGraph: (graphId, revision) => this.internals.loadGraph(graphId, revision),
+      loadCheck: (checkId, revision) => this.internals.loadCheck(checkId, revision),
+      summaryForRun: (runId) => this.internals.summaryForRun(runId),
+      tryResolveRun: (reference) => this.internals.tryResolveRun(reference),
     });
     this.projection = new RunProjection({
       config: this.config,
       database: this.database,
-      timestamp: () => this.timestamp(),
-      loadGraph: (graphId, revision) => this.loadGraph(graphId, revision),
-      resolveRun: (reference) => this.resolveRun(reference),
-      summaryForRun: (runId) => this.summaryForRun(runId),
-      nodesForRun: (runId, spec) => this.nodesForRun(runId, spec),
-      edgesForRun: (runId) => this.edgesForRun(runId),
-      recentEventsForRun: (runId, limit) => this.recentEventsForRun(runId, limit),
+      timestamp: () => this.internals.timestamp(),
+      loadGraph: (graphId, revision) => this.internals.loadGraph(graphId, revision),
+      resolveRun: (reference) => this.internals.resolveRun(reference),
+      summaryForRun: (runId) => this.internals.summaryForRun(runId),
+      nodesForRun: (runId, spec) => this.internals.nodesForRun(runId, spec),
+      edgesForRun: (runId) => this.internals.edgesForRun(runId),
+      recentEventsForRun: (runId, limit) => this.internals.recentEventsForRun(runId, limit),
+    });
+    this.internals = new RuntimeInternals({
+      config: this.config,
+      database: this.database,
+      now: () => this.now(),
+      authoring: this.authoring,
+      getSnapshot: (reference, eventLimit) => this.getSnapshot(reference, eventLimit),
+      readSnapshot: (reference, eventLimit) => this.readSnapshot(reference, eventLimit),
+    });
+    this.lifecycle = new RunLifecycle({
+      database: this.database,
+      runRow: (runId) => this.internals.runRow(runId),
+      descendantRunRows: (runId) => this.internals.descendantRunRows(runId),
+      appendEvent: (entry) => this.internals.appendEvent(entry),
+      getEvent: (sequence) => this.internals.getEvent(sequence),
+      getSnapshot: (reference, eventLimit) => this.getSnapshot(reference, eventLimit),
+      bumpRun: (runId, at) => this.internals.bumpRun(runId, at),
+      settleAncestors: (runId, at) => this.internals.settleAncestors(runId, at),
+      driveStaticSubgraphs: (runId, at, changes, runtimeChanges) =>
+        this.internals.driveStaticSubgraphs(runId, at, changes, runtimeChanges),
+      executeLifecycleMutation: (kind, reference, idempotencyKey, mutate) =>
+        this.internals.executeLifecycleMutation(kind, reference, idempotencyKey, mutate),
     });
     recoverTemplateTransactions(this.root, this.database);
   }
@@ -224,6 +204,8 @@ export class BurnGraphServiceBase {
   // surface unchanged for every existing caller.
   private readonly authoring: GraphAuthoring;
   private readonly projection: RunProjection;
+  private readonly lifecycle: RunLifecycle;
+  protected readonly internals: RuntimeInternals;
 
   validateGraph(input: unknown): GraphSpec {
     return this.authoring.validateGraph(input);
@@ -274,7 +256,7 @@ export class BurnGraphServiceBase {
   }
 
   startRun(graphId: string, requestedRunId?: string): MutationResult<GraphSnapshot> {
-    const validated = this.loadGraph(graphId);
+    const validated = this.internals.loadGraph(graphId);
     this.authoring.validateCheckReferences(validated.spec);
     const now = this.now();
     const at = now.toISOString();
@@ -334,7 +316,7 @@ export class BurnGraphServiceBase {
         ...validated.forwardEdges,
         ...validated.loopEdges,
       ]) {
-        this.insertEdge(runId, edge, at);
+        this.internals.insertEdge(runId, edge, at);
       }
 
       const start = validated.spec.nodes.find((node) => node.type === "start")!;
@@ -345,13 +327,13 @@ export class BurnGraphServiceBase {
             WHERE run_id = ? AND node_id = ?`,
         )
         .run(at, runId, start.id);
-      this.takeAllForwardEdges(runId, start.id, at);
+      this.internals.takeAllForwardEdges(runId, start.id, at);
       const changes = [{ nodeId: start.id, status: "done" }];
       const childChanges: RuntimeChange[] = [];
-      this.cascade(validated, runId, at, changes);
-      this.driveStaticSubgraphs(runId, at, changes, childChanges);
-      this.refreshRunTerminalStatus(runId, at);
-      const sequence = this.appendEvent({
+      this.internals.cascade(validated, runId, at, changes);
+      this.internals.driveStaticSubgraphs(runId, at, changes, childChanges);
+      this.internals.refreshRunTerminalStatus(runId, at);
+      const sequence = this.internals.appendEvent({
         runId,
         graphId,
         nodeId: start.id,
@@ -361,8 +343,8 @@ export class BurnGraphServiceBase {
         at,
       });
       const rootChange = {
-        revision: numberValue(this.runRow(runId), "runtime_revision"),
-        event: this.getEvent(sequence),
+        revision: numberValue(this.internals.runRow(runId), "runtime_revision"),
+        event: this.internals.getEvent(sequence),
       };
       return {
         sequence,
@@ -373,7 +355,7 @@ export class BurnGraphServiceBase {
     const snapshot = this.getSnapshot(runId);
     return {
       revision: snapshot.summary.runtimeRevision,
-      event: this.getEvent(started.sequence),
+      event: this.internals.getEvent(started.sequence),
       value: snapshot,
       changes: started.changes,
     };
@@ -385,7 +367,7 @@ export class BurnGraphServiceBase {
         .query("SELECT run_id FROM runs ORDER BY updated_at DESC")
         .all() as Row[];
       return rows.map((row) =>
-        this.summaryForRun(stringValue(row, "run_id")),
+        this.internals.summaryForRun(stringValue(row, "run_id")),
       );
     });
   }
@@ -417,375 +399,26 @@ export class BurnGraphServiceBase {
     return this.projection.inspectNode(reference, nodeId, eventLimit);
   }
 
+  // Run lifecycle lives in RunLifecycle; these delegates keep the public surface.
   pauseRun(
     reference: string,
     idempotencyKey: string,
   ): IdempotentMutationResult<GraphSnapshot> {
-    return this.executeLifecycleMutation(
-      "pause",
-      reference,
-      idempotencyKey,
-      (runId, at) => {
-      const target = this.runRow(runId);
-      if (stringValue(target, "status") !== "running") {
-        throw new BurnGraphError(
-          "INVALID_RUN_STATE",
-          `Cannot pause ${runId} from ${stringValue(target, "status")}`,
-        );
-      }
-      const tree = this.descendantRunRows(runId).filter((row) =>
-        stringValue(row, "status") === "running",
-      );
-      const conflicting = this.descendantRunRows(runId).find(
-        (row) =>
-          optionalString(row, "pause_scope_run_id") !== null &&
-          optionalString(row, "pause_scope_run_id") !== runId,
-      );
-      if (conflicting) {
-        throw new BurnGraphError(
-          "LIFECYCLE_CONFLICT",
-          `Run ${stringValue(conflicting, "run_id")} is already paused by another scope`,
-          true,
-          {
-            runId: stringValue(conflicting, "run_id"),
-            pauseScopeRunId: optionalString(conflicting, "pause_scope_run_id"),
-          },
-        );
-      }
-      const ids = tree.map((row) => stringValue(row, "run_id"));
-      const placeholders = ids.map(() => "?").join(", ");
-      const live = this.database.db
-        .query(
-          `SELECT
-             (SELECT COUNT(*)
-                FROM node_runs
-               WHERE run_id IN (${placeholders})
-                 AND status = 'running'
-                 AND assignment_id IS NOT NULL) +
-             (SELECT COUNT(*)
-                FROM check_executions
-               WHERE run_id IN (${placeholders})
-                 AND status = 'claimed') AS count`,
-        )
-        .get(...ids, ...ids) as Row;
-      const nextStatus = numberValue(live, "count") > 0 ? "pausing" : "paused";
-      this.database.db
-        .query(
-          `UPDATE runs
-              SET status = ?, pause_requested_at = ?,
-                  pause_scope_run_id = ?,
-                  paused_at = CASE WHEN ? = 'paused' THEN ? ELSE NULL END,
-                  runtime_revision = runtime_revision + 1,
-                  updated_at = ?
-            WHERE run_id IN (${placeholders})
-              AND status = 'running'`,
-        )
-        .run(nextStatus, at, runId, nextStatus, at, at, ...ids);
-      const changes: RuntimeChange[] = [];
-      let rootSequence = 0;
-      for (const row of tree) {
-        const affectedRunId = stringValue(row, "run_id");
-        const revision = numberValue(
-          this.runRow(affectedRunId),
-          "runtime_revision",
-        );
-        const sequence = this.appendEvent({
-          runId: affectedRunId,
-          graphId: stringValue(row, "graph_id"),
-          nodeId: null,
-          type: nextStatus === "paused" ? "run.paused" : "run.pausing",
-          summary:
-            nextStatus === "paused"
-              ? `Paused run ${affectedRunId}.`
-              : `Run ${affectedRunId} is quiescing.`,
-          payload: { rootRequestRunId: runId, revision },
-          at,
-        });
-        if (affectedRunId === runId) rootSequence = sequence;
-        changes.push({ revision, event: this.getEvent(sequence) });
-      }
-      return { rootSequence, changes };
-      },
-    );
+    return this.lifecycle.pauseRun(reference, idempotencyKey);
   }
 
   resumeRun(
     reference: string,
     idempotencyKey: string,
   ): IdempotentMutationResult<GraphSnapshot> {
-    return this.executeLifecycleMutation(
-      "resume",
-      reference,
-      idempotencyKey,
-      (runId, at) => {
-      const target = this.runRow(runId);
-      if (!["pausing", "paused"].includes(stringValue(target, "status"))) {
-        throw new BurnGraphError(
-          "INVALID_RUN_STATE",
-          `Cannot resume ${runId} from ${stringValue(target, "status")}`,
-        );
-      }
-      if (optionalString(target, "pause_scope_run_id") !== runId) {
-        throw new BurnGraphError(
-          "LIFECYCLE_CONFLICT",
-          `Run ${runId} is not the owner of its effective pause`,
-          true,
-          {
-            pauseScopeRunId: optionalString(target, "pause_scope_run_id"),
-          },
-        );
-      }
-      const tree = this.descendantRunRows(runId).filter((row) =>
-        optionalString(row, "pause_scope_run_id") === runId,
-      );
-      const liveRows = tree.filter((row) =>
-        ["pausing", "paused"].includes(stringValue(row, "status")),
-      );
-      const ids = tree.map((row) => stringValue(row, "run_id"));
-      const liveIds = liveRows.map((row) => stringValue(row, "run_id"));
-      const placeholders = ids.map(() => "?").join(", ");
-      const livePlaceholders = liveIds.map(() => "?").join(", ");
-      for (const row of tree) {
-        const pauseRequestedAt = optionalString(row, "pause_requested_at");
-        if (pauseRequestedAt === null) continue;
-        const pausedMs = Math.max(
-          0,
-          new Date(at).getTime() - new Date(pauseRequestedAt).getTime(),
-        );
-        const signals = this.database.db
-          .query(
-            `SELECT signal_id, deadline_at
-               FROM wait_signals
-              WHERE run_id = ? AND status = 'waiting'
-                AND deadline_at IS NOT NULL`,
-          )
-          .all(stringValue(row, "run_id")) as Row[];
-        for (const signal of signals) {
-          const shifted = new Date(
-            new Date(stringValue(signal, "deadline_at")).getTime() + pausedMs,
-          ).toISOString();
-          this.database.db
-            .query(
-              `UPDATE wait_signals
-                  SET deadline_at = ?, updated_at = ?
-                WHERE signal_id = ?`,
-            )
-            .run(shifted, at, stringValue(signal, "signal_id"));
-        }
-      }
-      this.database.db
-        .query(
-          `UPDATE runs
-              SET status = 'running',
-                  pause_requested_at = NULL, pause_scope_run_id = NULL,
-                  paused_at = NULL,
-                  runtime_revision = runtime_revision + 1,
-                  scheduler_ready_at = ?, updated_at = ?
-            WHERE run_id IN (${livePlaceholders})
-              AND status IN ('pausing', 'paused')`,
-        )
-        .run(at, at, ...liveIds);
-      this.database.db
-        .query(
-          `UPDATE runs
-              SET pause_requested_at = NULL, pause_scope_run_id = NULL,
-                  paused_at = NULL
-            WHERE run_id IN (${placeholders})
-              AND status NOT IN ('pausing', 'paused')`,
-        )
-        .run(...ids);
-      const systemChanges: RuntimeChange[] = [];
-      for (const affectedRunId of liveIds) {
-        const structural: Array<Record<string, unknown>> = [];
-        this.driveStaticSubgraphs(
-          affectedRunId,
-          at,
-          structural,
-          systemChanges,
-        );
-      }
-      const changes: RuntimeChange[] = [...systemChanges];
-      let rootSequence = 0;
-      for (const row of liveRows) {
-        const affectedRunId = stringValue(row, "run_id");
-        const revision = numberValue(
-          this.runRow(affectedRunId),
-          "runtime_revision",
-        );
-        const sequence = this.appendEvent({
-          runId: affectedRunId,
-          graphId: stringValue(row, "graph_id"),
-          nodeId: null,
-          type: "run.resumed",
-          summary: `Resumed run ${affectedRunId}.`,
-          payload: { rootRequestRunId: runId, revision },
-          at,
-        });
-        if (affectedRunId === runId) rootSequence = sequence;
-        changes.push({ revision, event: this.getEvent(sequence) });
-      }
-      return { rootSequence, changes };
-      },
-    );
+    return this.lifecycle.resumeRun(reference, idempotencyKey);
   }
 
   cancelRun(
     reference: string,
     idempotencyKey: string,
   ): IdempotentMutationResult<GraphSnapshot> {
-    return this.executeLifecycleMutation(
-      "cancel",
-      reference,
-      idempotencyKey,
-      (runId, at) => {
-      const target = this.runRow(runId);
-      const status = GraphStatusSchema.parse(stringValue(target, "status"));
-      if (!["running", "pausing", "paused"].includes(status)) {
-        throw new BurnGraphError(
-          "INVALID_RUN_STATE",
-          `Cannot cancel ${runId} from ${status}`,
-        );
-      }
-      const tree = this.descendantRunRows(runId).filter(
-        (row) =>
-          !["completed", "failed", "cancelled"].includes(
-            stringValue(row, "status"),
-          ),
-      );
-      const ids = tree.map((row) => stringValue(row, "run_id"));
-      const placeholders = ids.map(() => "?").join(", ");
-      const liveGates = this.database.db
-        .query(
-          `SELECT execution_id, run_id, node_id, attempt
-             FROM check_executions
-            WHERE run_id IN (${placeholders}) AND status = 'claimed'
-            ORDER BY run_id, node_id`,
-        )
-        .all(...ids) as Row[];
-      const waits = this.database.db
-        .query(
-          `SELECT signal_id
-             FROM wait_signals
-            WHERE run_id IN (${placeholders}) AND status = 'waiting'`,
-        )
-        .all(...ids) as Row[];
-      this.database.db
-        .query(
-          `UPDATE check_executions
-              SET status = 'stale'
-            WHERE run_id IN (${placeholders}) AND status = 'claimed'`,
-        )
-        .run(...ids);
-      this.database.db
-        .query(
-          `UPDATE wait_signals
-              SET status = 'stale', updated_at = ?
-            WHERE run_id IN (${placeholders}) AND status = 'waiting'`,
-        )
-        .run(at, ...ids);
-      this.database.db
-        .query(
-          `DELETE FROM resource_locks
-            WHERE owner_kind = 'assignment'
-              AND run_id IN (${placeholders})`,
-        )
-        .run(...ids);
-      this.database.db
-        .query(
-          `UPDATE attempts
-              SET status = 'cancelled', finished_at = ?
-            WHERE run_id IN (${placeholders}) AND finished_at IS NULL
-              AND NOT EXISTS (
-                SELECT 1
-                  FROM check_executions e
-                 WHERE e.run_id = attempts.run_id
-                   AND e.node_id = attempts.node_id
-                   AND e.attempt = attempts.attempt
-                   AND e.status = 'stale'
-              )`,
-        )
-        .run(at, ...ids);
-      this.database.db
-        .query(
-          `UPDATE node_runs
-              SET status = CASE
-                    WHEN EXISTS (
-                      SELECT 1
-                        FROM check_executions e
-                       WHERE e.run_id = node_runs.run_id
-                         AND e.node_id = node_runs.node_id
-                         AND e.attempt = node_runs.attempt
-                         AND e.status = 'stale'
-                    ) THEN 'running'
-                    WHEN status IN
-                         ('pending', 'ready', 'running', 'waiting', 'blocked')
-                    THEN 'cancelled' ELSE status END,
-                  assignment_id = NULL, actor_id = NULL,
-                  lease_expires_at = NULL, heartbeat_at = NULL,
-                  updated_at = ?
-            WHERE run_id IN (${placeholders})`,
-        )
-        .run(at, ...ids);
-      this.database.db
-        .query(`DELETE FROM actor_focus WHERE run_id IN (${placeholders})`)
-        .run(...ids);
-      this.database.db
-        .query(
-          `UPDATE runs
-              SET status = ?, cancel_requested_at = ?,
-                  focused_node_id = NULL, pause_scope_run_id = NULL,
-                  runtime_revision = runtime_revision + 1,
-                  updated_at = ?
-            WHERE run_id IN (${placeholders})`,
-        )
-        .run(liveGates.length > 0 ? "cancelling" : "cancelled", at, at, ...ids);
-      if (liveGates.length === 0) {
-        this.database.db
-          .query(
-            `UPDATE subgraph_links
-                SET outcome = 'cancelled', updated_at = ?
-              WHERE child_run_id IN (${placeholders})`,
-          )
-          .run(at, ...ids);
-      }
-      const changes: RuntimeChange[] = [];
-      let rootSequence = 0;
-      for (const row of tree) {
-        const affectedRunId = stringValue(row, "run_id");
-        const revision = numberValue(
-          this.runRow(affectedRunId),
-          "runtime_revision",
-        );
-        const sequence = this.appendEvent({
-          runId: affectedRunId,
-          graphId: stringValue(row, "graph_id"),
-          nodeId: null,
-          type: liveGates.length > 0 ? "run.cancelling" : "run.cancelled",
-          summary:
-            liveGates.length > 0
-              ? `Run ${affectedRunId} is waiting for ${liveGates.length} stale Gate execution(s).`
-              : `Cancelled run ${affectedRunId}.`,
-          payload: {
-            rootRequestRunId: runId,
-            staleGateExecutions: liveGates.map((gate) =>
-              stringValue(gate, "execution_id"),
-            ),
-            staleSignals: waits.map((wait) =>
-              stringValue(wait, "signal_id"),
-            ),
-            revision,
-          },
-          at,
-        });
-        if (affectedRunId === runId) rootSequence = sequence;
-        changes.push({ revision, event: this.getEvent(sequence) });
-      }
-      if (liveGates.length === 0) {
-        changes.push(...this.settleAncestors(runId, at));
-      }
-      return { rootSequence, changes };
-      },
-    );
+    return this.lifecycle.cancelRun(reference, idempotencyKey);
   }
 
   setRunPriority(
@@ -793,64 +426,14 @@ export class BurnGraphServiceBase {
     value: RunPriority,
     idempotencyKey: string,
   ): IdempotentMutationResult<GraphSnapshot> {
-    const priority = RunPrioritySchema.parse(value);
-    const target = this.getSnapshot(reference, 0).summary;
-    if (target.parentRunId !== null) {
-      throw new BurnGraphError(
-        "PRIORITY_ROOT_REQUIRED",
-        `Run ${target.runId} is not a root Run`,
-        false,
-        { rootRunId: target.rootRunId },
-      );
-    }
-    return this.executeLifecycleMutation(
-      `priority:${priority}`,
-      reference,
-      idempotencyKey,
-      (runId, at) => {
-        const run = this.runRow(runId);
-        const status = GraphStatusSchema.parse(stringValue(run, "status"));
-        if (
-          !["running", "pausing", "paused", "cancelling"].includes(status)
-        ) {
-          throw new BurnGraphError(
-            "INVALID_RUN_STATE",
-            `Cannot change priority for ${runId} from ${status}`,
-          );
-        }
-        const previous = RunPrioritySchema.parse(
-          stringValue(run, "priority"),
-        );
-        this.database.db
-          .query(
-            `UPDATE runs
-                SET priority = ?, updated_at = ?
-              WHERE run_id = ?`,
-          )
-          .run(priority, at, runId);
-        const revision = this.bumpRun(runId, at);
-        const sequence = this.appendEvent({
-          runId,
-          graphId: stringValue(run, "graph_id"),
-          nodeId: null,
-          type: "run.priority_changed",
-          summary: `Changed ${runId} priority from ${previous} to ${priority}.`,
-          payload: { previous, priority, revision },
-          at,
-        });
-        return {
-          rootSequence: sequence,
-          changes: [{ revision, event: this.getEvent(sequence) }],
-        };
-      },
-    );
+    return this.lifecycle.setRunPriority(reference, value, idempotencyKey);
   }
 
   listReady(graphReference?: string): readonly ReadyWork[] {
     const parameters: string[] = [];
     let filter = "";
     if (graphReference) {
-      const runId = this.resolveRun(graphReference);
+      const runId = this.internals.resolveRun(graphReference);
       filter = "AND n.run_id = ?";
       parameters.push(runId);
     }
@@ -966,7 +549,7 @@ export class BurnGraphServiceBase {
           `${runId}/${nodeId} is not a valid ready Gate`,
         );
       }
-      const check = this.loadCheck(node.check.id, node.check.revision);
+      const check = this.internals.loadCheck(node.check.id, node.check.revision);
       const resources = gateResources(node.resources ?? [], check.resources);
       return {
         runId,
@@ -984,8 +567,8 @@ export class BurnGraphServiceBase {
   ): MutationResult<AssignmentPacket> {
     IdentifierSchema.parse(nodeId);
     IdentifierSchema.parse(actorId);
-    const runId = this.resolveRun(reference);
-    const validated = this.graphForRun(runId);
+    const runId = this.internals.resolveRun(reference);
+    const validated = this.internals.graphForRun(runId);
     const nodeSpec = validated.nodesById.get(nodeId);
     if (!nodeSpec || !isAssignableNode(nodeSpec)) {
       throw new BurnGraphError(
@@ -1001,7 +584,7 @@ export class BurnGraphServiceBase {
     const expiresAt = leaseTime(now, duration);
 
     const claimed = this.database.immediate(() => {
-      const run = this.runRow(runId);
+      const run = this.internals.runRow(runId);
       if (stringValue(run, "status") !== "running") {
         throw new BurnGraphError(
           "RUN_NOT_RUNNING",
@@ -1009,7 +592,7 @@ export class BurnGraphServiceBase {
           true,
         );
       }
-      const row = this.nodeRow(runId, nodeId);
+      const row = this.internals.nodeRow(runId, nodeId);
       let status = NodeStatusSchema.parse(stringValue(row, "status"));
       let recoveredExpiredAttempt: {
         readonly attempt: number;
@@ -1046,7 +629,7 @@ export class BurnGraphServiceBase {
             .run(staleActorId, runId, nodeId);
         }
         if (staleAssignmentId !== null) {
-          this.releaseAssignmentResources(staleAssignmentId);
+          this.internals.releaseAssignmentResources(staleAssignmentId);
         }
         recoveredExpiredAttempt = {
           attempt: staleAttempt,
@@ -1182,8 +765,13 @@ export class BurnGraphServiceBase {
             WHERE run_id = ?`,
         )
         .run(at, stringValue(run, "root_run_id"));
-      const revision = this.bumpRun(runId, at, undefined, nodeId);
-      const sequence = this.appendEvent({
+      const revision = this.internals.bumpRun(runId, at, undefined, nodeId);
+      // I0011: the event sequence is kept rather than returned here, because the
+      // packet and the Actor's aggregate payload must be bounded inside this
+      // transaction. Returning early would commit the claim and leave an
+      // oversized Assignment to fail at the output edge, after the state
+      // transition — the exact defect I0011 records.
+      const sequence = this.internals.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -1200,7 +788,7 @@ export class BurnGraphServiceBase {
         },
         at,
       });
-      const packet = this.assignmentPacket(runId, nodeId, actorId);
+      const packet = this.internals.assignmentPacket(runId, nodeId, actorId);
       const actorAssignments = this.assignmentsForActor(actorId);
       const requestedBytes = serializedBytes(actorAssignments);
       if (requestedBytes > MAX_ACTOR_ASSIGNMENT_BYTES) {
@@ -1220,9 +808,12 @@ export class BurnGraphServiceBase {
       return { sequence, packet };
     });
 
+    // The packet comes from inside the transaction, not from a second read after
+    // it: only the in-transaction value is the one that was bounds-checked and
+    // would have rolled back had it been too large.
     return {
-      revision: this.summaryForRun(runId).runtimeRevision,
-      event: this.getEvent(claimed.sequence),
+      revision: this.internals.summaryForRun(runId).runtimeRevision,
+      event: this.internals.getEvent(claimed.sequence),
       value: claimed.packet,
     };
   }
@@ -1235,7 +826,7 @@ export class BurnGraphServiceBase {
     expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
     IdentifierSchema.parse(actorId);
-    const runId = this.resolveRun(reference);
+    const runId = this.internals.resolveRun(reference);
     const now = this.now();
     const at = now.toISOString();
     const duration = validateLeaseSeconds(
@@ -1243,7 +834,7 @@ export class BurnGraphServiceBase {
     );
     const expiresAt = leaseTime(now, duration);
     const sequence = this.database.immediate(() => {
-      const row = this.requireOwnedRunningNode(
+      const row = this.internals.requireOwnedRunningNode(
         runId,
         nodeId,
         actorId,
@@ -1267,9 +858,9 @@ export class BurnGraphServiceBase {
           )
           .run(expiresAt, assignmentId);
       }
-      const run = this.runRow(runId);
-      const revision = this.bumpRun(runId, at);
-      return this.appendEvent({
+      const run = this.internals.runRow(runId);
+      const revision = this.internals.bumpRun(runId, at);
+      return this.internals.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -1279,7 +870,7 @@ export class BurnGraphServiceBase {
         at,
       });
     });
-    return this.mutationNode(runId, nodeId, sequence);
+    return this.internals.mutationNode(runId, nodeId, sequence);
   }
 
   checkpoint(
@@ -1290,11 +881,11 @@ export class BurnGraphServiceBase {
     expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
     const checkpoint = CheckpointInputSchema.parse(input);
-    const runId = this.resolveRun(reference);
+    const runId = this.internals.resolveRun(reference);
     const now = this.now();
     const at = now.toISOString();
     const sequence = this.database.immediate(() => {
-      const row = this.requireOwnedRunningNode(
+      const row = this.internals.requireOwnedRunningNode(
         runId,
         nodeId,
         actorId,
@@ -1316,9 +907,9 @@ export class BurnGraphServiceBase {
             WHERE run_id = ? AND node_id = ? AND attempt = ?`,
         )
         .run(json(checkpoint), runId, nodeId, attempt);
-      const run = this.runRow(runId);
-      const revision = this.bumpRun(runId, at);
-      return this.appendEvent({
+      const run = this.internals.runRow(runId);
+      const revision = this.internals.bumpRun(runId, at);
+      return this.internals.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -1328,7 +919,7 @@ export class BurnGraphServiceBase {
         at,
       });
     });
-    return this.mutationNode(runId, nodeId, sequence);
+    return this.internals.mutationNode(runId, nodeId, sequence);
   }
 
   complete(
@@ -1339,8 +930,8 @@ export class BurnGraphServiceBase {
     expectation?: AssignmentExpectation,
   ): MutationResult<GraphSnapshot> {
     const completion = CompletionInputSchema.parse(input);
-    const runId = this.resolveRun(reference);
-    const validated = this.graphForRun(runId);
+    const runId = this.internals.resolveRun(reference);
+    const validated = this.internals.graphForRun(runId);
     const nodeSpec = validated.nodesById.get(nodeId);
     if (!nodeSpec) {
       throw new BurnGraphError("NODE_NOT_FOUND", `Unknown node ${nodeId}`);
@@ -1406,7 +997,7 @@ export class BurnGraphServiceBase {
     const now = this.now();
     const at = now.toISOString();
     const completed = this.database.immediate(() => {
-      const node = this.requireOwnedRunningNode(
+      const node = this.internals.requireOwnedRunningNode(
         runId,
         nodeId,
         actorId,
@@ -1415,10 +1006,10 @@ export class BurnGraphServiceBase {
       );
       const attempt = numberValue(node, "attempt");
       const assignmentId = optionalString(node, "assignment_id");
-      const run = this.runRow(runId);
+      const run = this.internals.runRow(runId);
       const normalizedChildren =
         dynamicChildren !== null && dynamicChildren.success
-          ? this.normalizedChildSet(
+          ? this.internals.normalizedChildSet(
               runId,
               nodeId,
               dynamicChildren.data.children,
@@ -1462,7 +1053,7 @@ export class BurnGraphServiceBase {
           attempt,
         );
       if (assignmentId !== null) {
-        this.releaseAssignmentResources(assignmentId);
+        this.internals.releaseAssignmentResources(assignmentId);
       }
       this.database.db
         .query(
@@ -1479,7 +1070,7 @@ export class BurnGraphServiceBase {
       ];
       const childChanges: RuntimeChange[] = [];
       if (normalizedChildren !== null) {
-        this.attachNormalizedSubgraphChildren(
+        this.internals.attachNormalizedSubgraphChildren(
           runId,
           nodeId,
           normalizedChildren,
@@ -1488,7 +1079,7 @@ export class BurnGraphServiceBase {
           childChanges,
         );
       } else if (nodeSpec.type === "decision") {
-        const selected = this.edgeRowsFrom(runId, nodeId).find(
+        const selected = this.internals.edgeRowsFrom(runId, nodeId).find(
           (edge) => optionalString(edge, "route") === completion.route,
         )!;
         const maxTraversals = optionalNumber(selected, "max_traversals");
@@ -1502,7 +1093,7 @@ export class BurnGraphServiceBase {
               { traversals, maxTraversals },
             );
           }
-          this.resetLoop(
+          this.internals.resetLoop(
             validated,
             runId,
             stringValue(selected, "edge_id"),
@@ -1512,9 +1103,9 @@ export class BurnGraphServiceBase {
             changes,
           );
         } else {
-          this.selectDecisionEdge(runId, nodeId, completion.route!, at);
-          this.cascade(validated, runId, at, changes);
-          this.driveStaticSubgraphs(
+          this.internals.selectDecisionEdge(runId, nodeId, completion.route!, at);
+          this.internals.cascade(validated, runId, at, changes);
+          this.internals.driveStaticSubgraphs(
             runId,
             at,
             changes,
@@ -1522,18 +1113,18 @@ export class BurnGraphServiceBase {
           );
         }
       } else {
-        this.takeAllForwardEdges(runId, nodeId, at);
-        this.cascade(validated, runId, at, changes);
-        this.driveStaticSubgraphs(
+        this.internals.takeAllForwardEdges(runId, nodeId, at);
+        this.internals.cascade(validated, runId, at, changes);
+        this.internals.driveStaticSubgraphs(
           runId,
           at,
           changes,
           childChanges,
         );
       }
-      this.refreshRunTerminalStatus(runId, at);
-      const revision = this.bumpRun(runId, at, undefined, null);
-      const sequence = this.appendEvent({
+      this.internals.refreshRunTerminalStatus(runId, at);
+      const revision = this.internals.bumpRun(runId, at, undefined, null);
+      const sequence = this.internals.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -1551,16 +1142,16 @@ export class BurnGraphServiceBase {
       });
       const mutationChanges: RuntimeChange[] = [
         ...childChanges,
-        { revision, event: this.getEvent(sequence) },
-        ...this.settleAncestors(runId, at),
+        { revision, event: this.internals.getEvent(sequence) },
+        ...this.internals.settleAncestors(runId, at),
       ];
       return { sequence, mutationChanges };
     });
     const quiesced = this.database.immediate(() =>
-      this.quiescePauseContainingRun(runId, at),
+      this.internals.quiescePauseContainingRun(runId, at),
     );
     return {
-      ...this.mutationSnapshot(runId, completed.sequence),
+      ...this.internals.mutationSnapshot(runId, completed.sequence),
       changes: [...completed.mutationChanges, ...quiesced],
     };
   }
@@ -1572,7 +1163,7 @@ export class BurnGraphServiceBase {
     reason: string,
     expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
-    return this.stopNode(
+    return this.internals.stopNode(
       reference,
       nodeId,
       actorId,
@@ -1591,7 +1182,7 @@ export class BurnGraphServiceBase {
     retry: boolean,
     expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
-    return this.stopNode(
+    return this.internals.stopNode(
       reference,
       nodeId,
       actorId,
@@ -1609,7 +1200,7 @@ export class BurnGraphServiceBase {
     reason = "Released by actor.",
     expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
-    return this.stopNode(
+    return this.internals.stopNode(
       reference,
       nodeId,
       actorId,
@@ -1625,10 +1216,10 @@ export class BurnGraphServiceBase {
     nodeId: string,
     expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
-    const runId = this.resolveRun(reference);
-    const at = this.timestamp();
+    const runId = this.internals.resolveRun(reference);
+    const at = this.internals.timestamp();
     const sequence = this.database.immediate(() => {
-      const node = this.nodeRow(runId, nodeId);
+      const node = this.internals.nodeRow(runId, nodeId);
       if (stringValue(node, "status") !== "blocked") {
         throw new BurnGraphError(
           "NODE_NOT_BLOCKED",
@@ -1656,9 +1247,9 @@ export class BurnGraphServiceBase {
             WHERE run_id = ? AND node_id = ?`,
         )
         .run(at, runId, nodeId);
-      const run = this.runRow(runId);
-      const revision = this.bumpRun(runId, at);
-      return this.appendEvent({
+      const run = this.internals.runRow(runId);
+      const revision = this.internals.bumpRun(runId, at);
+      return this.internals.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -1668,7 +1259,7 @@ export class BurnGraphServiceBase {
         at,
       });
     });
-    return this.mutationNode(runId, nodeId, sequence);
+    return this.internals.mutationNode(runId, nodeId, sequence);
   }
 
   focus(
@@ -1678,10 +1269,10 @@ export class BurnGraphServiceBase {
     expectation?: AssignmentExpectation,
   ): MutationResult<AssignmentPacket> {
     IdentifierSchema.parse(actorId);
-    const runId = this.resolveRun(reference);
-    const at = this.timestamp();
+    const runId = this.internals.resolveRun(reference);
+    const at = this.internals.timestamp();
     const sequence = this.database.immediate(() => {
-      const node = this.requireOwnedRunningNode(
+      const node = this.internals.requireOwnedRunningNode(
         runId,
         nodeId,
         actorId,
@@ -1698,9 +1289,9 @@ export class BurnGraphServiceBase {
              updated_at = excluded.updated_at`,
         )
         .run(actorId, runId, nodeId, at);
-      const run = this.runRow(runId);
-      const revision = this.bumpRun(runId, at, undefined, nodeId);
-      return this.appendEvent({
+      const run = this.internals.runRow(runId);
+      const revision = this.internals.bumpRun(runId, at, undefined, nodeId);
+      return this.internals.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -1710,10 +1301,10 @@ export class BurnGraphServiceBase {
         at,
       });
     });
-    const packet = this.assignmentPacket(runId, nodeId, actorId);
+    const packet = this.internals.assignmentPacket(runId, nodeId, actorId);
     return {
-      revision: this.summaryForRun(runId).runtimeRevision,
-      event: this.getEvent(sequence),
+      revision: this.internals.summaryForRun(runId).runtimeRevision,
+      event: this.internals.getEvent(sequence),
       value: packet,
     };
   }
@@ -1771,7 +1362,7 @@ export class BurnGraphServiceBase {
     const packets: AssignmentPacket[] = [];
     for (const claim of claims) {
       try {
-        const packet = this.assignmentPacket(
+        const packet = this.internals.assignmentPacket(
           claim.runId,
           claim.nodeId,
           actorId,
@@ -1940,7 +1531,7 @@ export class BurnGraphServiceBase {
     const allRemainingReady = this.listReady();
     return {
       actorId,
-      state: this.scheduleState(finalAssignments, allRuns),
+      state: this.internals.scheduleState(finalAssignments, allRuns),
       assignments: finalAssignments,
       remainingReady: allRemainingReady.slice(
         0,
@@ -1991,7 +1582,7 @@ export class BurnGraphServiceBase {
     const remainingReady = this.listReady();
     return {
       actorId,
-      state: this.scheduleState(assignments, allRuns),
+      state: this.internals.scheduleState(assignments, allRuns),
       assignments,
       remainingReady: remainingReady.slice(
         0,
@@ -2098,7 +1689,7 @@ export class BurnGraphServiceBase {
       const scheduled = this.scheduleAtomic(actorId, runId);
       return {
         ...scheduled,
-        started: this.summaryForRun(runId),
+        started: this.internals.summaryForRun(runId),
         changes: [
           ...(started.changes ?? [
             { revision: started.revision, event: started.event },
@@ -2166,7 +1757,7 @@ export class BurnGraphServiceBase {
       const scheduled = this.scheduleAtomic(actorId, runId);
       const result: ResumeContinuation = {
         ...scheduled,
-        resumed: this.summaryForRun(runId),
+        resumed: this.internals.summaryForRun(runId),
         replayed: false,
         changes: [
           ...(resumed.changes ?? [
@@ -2200,12 +1791,12 @@ export class BurnGraphServiceBase {
     input: unknown,
   ): CompletionContinuation {
     const completion = CompletionInputSchema.parse(input);
-    let identity = this.assignmentIdentity(assignmentId);
+    let identity = this.internals.assignmentIdentity(assignmentId);
     let replayed = false;
     const changes: RuntimeChange[] = [];
 
     if (identity.status === "done") {
-      this.requireMatchingReplay(identity, completion);
+      this.internals.requireMatchingReplay(identity, completion);
       const row = this.database.db
         .query(
           `SELECT continuation_json
@@ -2240,11 +1831,11 @@ export class BurnGraphServiceBase {
             },
           ]),
         );
-        identity = this.assignmentIdentity(assignmentId);
+        identity = this.internals.assignmentIdentity(assignmentId);
       } catch (error) {
-        const current = this.assignmentIdentity(assignmentId);
+        const current = this.internals.assignmentIdentity(assignmentId);
         if (current.status !== "done") throw error;
-        this.requireMatchingReplay(current, completion);
+        this.internals.requireMatchingReplay(current, completion);
         identity = current;
         replayed = true;
       }
@@ -2283,7 +1874,7 @@ export class BurnGraphServiceBase {
   }
 
   focusAssignment(assignmentId: string): MutationResult<AssignmentPacket> {
-    const identity = this.assignmentIdentity(assignmentId);
+    const identity = this.internals.assignmentIdentity(assignmentId);
     return this.focus(identity.runId, identity.nodeId, identity.actorId, {
       assignmentId,
       attempt: identity.attempt,
@@ -2293,7 +1884,7 @@ export class BurnGraphServiceBase {
   heartbeatAssignment(
     assignmentId: string,
   ): MutationResult<RuntimeNode> {
-    const identity = this.assignmentIdentity(assignmentId);
+    const identity = this.internals.assignmentIdentity(assignmentId);
     return this.heartbeat(
       identity.runId,
       identity.nodeId,
@@ -2307,7 +1898,7 @@ export class BurnGraphServiceBase {
     assignmentId: string,
     input: unknown,
   ): MutationResult<RuntimeNode> {
-    const identity = this.assignmentIdentity(assignmentId);
+    const identity = this.internals.assignmentIdentity(assignmentId);
     return this.checkpoint(
       identity.runId,
       identity.nodeId,
@@ -2321,7 +1912,7 @@ export class BurnGraphServiceBase {
     assignmentId: string,
     reason: string,
   ): WorkSchedule & { readonly blocked: RuntimeNode } {
-    const identity = this.assignmentIdentity(assignmentId);
+    const identity = this.internals.assignmentIdentity(assignmentId);
     const blocked = this.block(
       identity.runId,
       identity.nodeId,
@@ -2346,7 +1937,7 @@ export class BurnGraphServiceBase {
     assignmentId: string,
     reason: string,
   ): WorkSchedule & { readonly released: RuntimeNode } {
-    const identity = this.assignmentIdentity(assignmentId);
+    const identity = this.internals.assignmentIdentity(assignmentId);
     const released = this.release(
       identity.runId,
       identity.nodeId,
@@ -2372,7 +1963,7 @@ export class BurnGraphServiceBase {
     reason: string,
     retry: boolean,
   ): WorkSchedule & { readonly failed: RuntimeNode } {
-    const identity = this.assignmentIdentity(assignmentId);
+    const identity = this.internals.assignmentIdentity(assignmentId);
     const failed = this.fail(
       identity.runId,
       identity.nodeId,
@@ -2397,7 +1988,7 @@ export class BurnGraphServiceBase {
   unblockAssignment(
     assignmentId: string,
   ): WorkSchedule & { readonly unblocked: RuntimeNode } {
-    const identity = this.assignmentIdentity(assignmentId);
+    const identity = this.internals.assignmentIdentity(assignmentId);
     if (identity.status !== "blocked") {
       throw new BurnGraphError(
         "ASSIGNMENT_NOT_BLOCKED",
@@ -2423,8 +2014,8 @@ export class BurnGraphServiceBase {
   reconcileExpired(
     reference?: string,
   ): readonly MutationResult<readonly RuntimeNode[]>[] {
-    const at = this.timestamp();
-    const requestedRunId = reference ? this.resolveRun(reference) : null;
+    const at = this.internals.timestamp();
+    const requestedRunId = reference ? this.internals.resolveRun(reference) : null;
     const runRows = requestedRunId
       ? ([{ run_id: requestedRunId }] as Row[])
       : (this.database.db
@@ -2459,7 +2050,7 @@ export class BurnGraphServiceBase {
           const nodeId = stringValue(row, "node_id");
           const actorId = optionalString(row, "actor_id");
           const assignmentId = optionalString(row, "assignment_id");
-          const node = this.nodeRow(runId, nodeId);
+          const node = this.internals.nodeRow(runId, nodeId);
           const attempt = numberValue(node, "attempt");
           this.database.db
             .query(
@@ -2486,13 +2077,13 @@ export class BurnGraphServiceBase {
               .run(actorId, runId, nodeId);
           }
           if (assignmentId !== null) {
-            this.releaseAssignmentResources(assignmentId);
+            this.internals.releaseAssignmentResources(assignmentId);
           }
         }
 
-        const run = this.runRow(runId);
-        const revision = this.bumpRun(runId, at);
-        const sequence = this.appendEvent({
+        const run = this.internals.runRow(runId);
+        const revision = this.internals.bumpRun(runId, at);
+        const sequence = this.internals.appendEvent({
           runId,
           graphId: stringValue(run, "graph_id"),
           nodeId: null,
@@ -2513,12 +2104,12 @@ export class BurnGraphServiceBase {
       if (!reconciled) continue;
 
       const quiesced = this.database.immediate(() =>
-        this.quiescePauseContainingRun(runId, at),
+        this.internals.quiescePauseContainingRun(runId, at),
       );
       const snapshot = this.getSnapshot(runId);
       const reconciledChange = {
         revision: reconciled.revision,
-        event: this.getEvent(reconciled.sequence),
+        event: this.internals.getEvent(reconciled.sequence),
       };
       results.push({
         revision: reconciled.revision,
@@ -2542,7 +2133,7 @@ export class BurnGraphServiceBase {
     }
     let rows: Row[];
     if (reference) {
-      const runId = this.resolveRun(reference);
+      const runId = this.internals.resolveRun(reference);
       rows = this.database.db
         .query(
           `SELECT *
@@ -2563,7 +2154,7 @@ export class BurnGraphServiceBase {
         )
         .all(afterSequence, limit) as Row[];
     }
-    return rows.map((row) => this.eventFromRow(row));
+    return rows.map((row) => this.internals.eventFromRow(row));
   }
 
   inspectOverview(options: PortfolioOverviewOptions): PortfolioOverview {
@@ -2591,7 +2182,7 @@ export class BurnGraphServiceBase {
     return this.database.read(() => {
       const project = this.projectSnapshot();
       const selectedRunId = options.run
-        ? this.resolveRun(options.run)
+        ? this.internals.resolveRun(options.run)
         : null;
       const selectedRootRunId = options.root
         ? this.getSnapshot(options.root, 0).summary.rootRunId
@@ -2752,11 +2343,11 @@ export class BurnGraphServiceBase {
 
   inspectMetrics(reference?: string): RuntimeMetrics {
     return this.database.read(() => {
-      const scopeRunId = reference ? this.resolveRun(reference) : null;
+      const scopeRunId = reference ? this.internals.resolveRun(reference) : null;
       const runIds =
         scopeRunId === null
           ? this.listRuns().map((run) => run.runId)
-          : this.descendantRunRows(scopeRunId).map((row) =>
+          : this.internals.descendantRunRows(scopeRunId).map((row) =>
               stringValue(row, "run_id"),
             );
       return deriveRuntimeMetrics({
@@ -2818,1890 +2409,10 @@ export class BurnGraphServiceBase {
             descendantRuns: descendants.get(summary.runId) ?? 0,
           })),
         lastEventSequence: numberValue(row, "sequence"),
-        capturedAt: this.timestamp(),
+        capturedAt: this.internals.timestamp(),
         metrics: this.inspectMetrics(),
       };
     });
   }
 
-  protected timestamp(): string {
-    return this.now().toISOString();
-  }
-
-  private executeLifecycleMutation(
-    operation: LifecycleOperation,
-    reference: string,
-    idempotencyKey: string,
-    mutate: (
-      runId: string,
-      at: string,
-    ) => {
-      readonly rootSequence: number;
-      readonly changes: readonly RuntimeChange[];
-    },
-  ): IdempotentMutationResult<GraphSnapshot> {
-    const key = IdempotencyKeySchema.parse(idempotencyKey);
-    if (reference.length === 0 || reference.length > 128) {
-      throw new BurnGraphError(
-        "INVALID_RUN_REFERENCE",
-        "Run reference must contain 1-128 characters",
-      );
-    }
-    const at = this.timestamp();
-    const outcome = this.database.immediate(() => {
-      const existing = this.database.db
-        .query(
-          `SELECT operation, request_reference, result_json
-             FROM lifecycle_requests
-            WHERE idempotency_key = ?`,
-        )
-        .get(key) as Row | null;
-      if (existing) {
-        const storedOperation = stringValue(existing, "operation");
-        const storedReference = stringValue(existing, "request_reference");
-        if (
-          storedOperation !== operation ||
-          storedReference !== reference
-        ) {
-          throw new BurnGraphError(
-            "IDEMPOTENCY_KEY_CONFLICT",
-            `Idempotency key ${key} already owns another lifecycle request`,
-            false,
-            {
-              operation: storedOperation,
-              requestReference: storedReference,
-            },
-          );
-        }
-        let receipt: LifecycleReceipt;
-        try {
-          receipt = JSON.parse(
-            stringValue(existing, "result_json"),
-          ) as LifecycleReceipt;
-        } catch {
-          throw new BurnGraphError(
-            "CORRUPT_STATE",
-            `Lifecycle receipt ${key} is invalid`,
-          );
-        }
-        return { receipt, replayed: true };
-      }
-
-      const runId = this.resolveRun(reference);
-      const mutation = mutate(runId, at);
-      const rootChange = mutation.changes.find(
-        (change) => change.event.sequence === mutation.rootSequence,
-      );
-      if (!rootChange) {
-        throw new BurnGraphError(
-          "CORRUPT_STATE",
-          `Lifecycle ${operation} did not produce a root change`,
-        );
-      }
-      const receipt: LifecycleReceipt = {
-        runId,
-        rootSequence: mutation.rootSequence,
-        rootRevision: rootChange.revision,
-        snapshot: this.readSnapshot(runId, 100),
-        changes: mutation.changes.map((change) => ({
-          revision: change.revision,
-          eventSequence: change.event.sequence,
-        })),
-      };
-      this.database.db
-        .query(
-          `INSERT INTO lifecycle_requests (
-             idempotency_key, operation, request_reference, target_run_id,
-             result_json, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(key, operation, reference, runId, json(receipt), at);
-      return { receipt, replayed: false };
-    });
-
-    return {
-      revision: outcome.receipt.rootRevision,
-      event: this.getEvent(outcome.receipt.rootSequence),
-      value:
-        outcome.receipt.snapshot ??
-        this.getSnapshot(outcome.receipt.runId),
-      changes: outcome.receipt.changes.map((change) => ({
-        revision: change.revision,
-        event: this.getEvent(change.eventSequence),
-      })),
-      replayed: outcome.replayed,
-    };
-  }
-
-  private loadGraph(graphId: string, revision?: number): ValidatedGraph {
-    IdentifierSchema.parse(graphId);
-    let row: Row | null;
-    if (revision === undefined) {
-      row = this.database.db
-        .query(
-          `SELECT document_json
-             FROM graph_specs
-            WHERE graph_id = ?
-            ORDER BY revision DESC
-            LIMIT 1`,
-        )
-        .get(graphId) as Row | null;
-    } else {
-      row = this.database.db
-        .query(
-          `SELECT document_json
-             FROM graph_specs
-            WHERE graph_id = ? AND revision = ?`,
-        )
-        .get(graphId, revision) as Row | null;
-    }
-    if (!row) {
-      throw new BurnGraphError("GRAPH_NOT_FOUND", `Unknown graph ${graphId}`);
-    }
-    return validateGraphSpec(JSON.parse(stringValue(row, "document_json")));
-  }
-
-  protected loadCheck(checkId: string, revision?: number): CheckSpec {
-    IdentifierSchema.parse(checkId);
-    let row: Row | null;
-    if (revision === undefined) {
-      row = this.database.db
-        .query(
-          `SELECT document_json
-             FROM check_specs
-            WHERE check_id = ?
-            ORDER BY revision DESC
-            LIMIT 1`,
-        )
-        .get(checkId) as Row | null;
-    } else {
-      row = this.database.db
-        .query(
-          `SELECT document_json
-             FROM check_specs
-            WHERE check_id = ? AND revision = ?`,
-        )
-        .get(checkId, revision) as Row | null;
-    }
-    if (!row) {
-      throw new BurnGraphError(
-        "CHECK_NOT_FOUND",
-        `Unknown Check ${checkId}${revision === undefined ? "" : `@${revision}`}`,
-      );
-    }
-    return validateCheckSpec(JSON.parse(stringValue(row, "document_json")));
-  }
-
-  protected graphForRun(runId: string): ValidatedGraph {
-    const row = this.runRow(runId);
-    return this.loadGraph(
-      stringValue(row, "graph_id"),
-      numberValue(row, "spec_revision"),
-    );
-  }
-
-  private tryResolveRun(reference: string): string | null {
-    const exact = this.database.db
-      .query("SELECT run_id FROM runs WHERE run_id = ?")
-      .get(reference) as Row | null;
-    if (exact) return stringValue(exact, "run_id");
-    const graph = this.database.db
-      .query(
-        `SELECT run_id
-           FROM runs
-          WHERE graph_id = ?
-          ORDER BY CASE
-                     WHEN status IN
-                          ('running', 'pausing', 'paused', 'cancelling')
-                     THEN 0 ELSE 1
-                   END,
-                   updated_at DESC
-          LIMIT 1`,
-      )
-      .get(reference) as Row | null;
-    return graph ? stringValue(graph, "run_id") : null;
-  }
-
-  protected resolveRun(reference: string): string {
-    const runId = this.tryResolveRun(reference);
-    if (!runId) {
-      throw new BurnGraphError("RUN_NOT_FOUND", `Unknown run or graph ${reference}`);
-    }
-    return runId;
-  }
-
-  protected runRow(runId: string): Row {
-    const row = this.database.db
-      .query("SELECT * FROM runs WHERE run_id = ?")
-      .get(runId) as Row | null;
-    if (!row) throw new BurnGraphError("RUN_NOT_FOUND", `Unknown run ${runId}`);
-    return row;
-  }
-
-  protected descendantRunRows(runId: string): readonly Row[] {
-    return this.database.db
-      .query(
-        `WITH RECURSIVE tree(run_id) AS (
-           SELECT ?
-           UNION ALL
-           SELECT r.run_id
-             FROM runs r
-             JOIN tree ON r.parent_run_id = tree.run_id
-         )
-         SELECT r.*
-           FROM runs r
-           JOIN tree ON tree.run_id = r.run_id
-          ORDER BY r.depth DESC, r.run_id`,
-      )
-      .all(runId) as Row[];
-  }
-
-  protected quiescePauseContainingRun(
-    runId: string,
-    at: string,
-  ): readonly RuntimeChange[] {
-    const pauseScopeRunId = optionalString(
-      this.runRow(runId),
-      "pause_scope_run_id",
-    );
-    if (pauseScopeRunId === null) return [];
-    const pausing = this.database.db
-      .query(
-        `SELECT *
-           FROM runs
-          WHERE pause_scope_run_id = ? AND status = 'pausing'
-          ORDER BY depth DESC, run_id`,
-      )
-      .all(pauseScopeRunId) as Row[];
-    if (pausing.length === 0) return [];
-    const live = this.database.db
-      .query(
-        `SELECT
-           (SELECT COUNT(*)
-              FROM node_runs n
-              JOIN runs r ON r.run_id = n.run_id
-             WHERE r.pause_scope_run_id = ?
-               AND r.status = 'pausing'
-               AND n.status = 'running'
-               AND n.assignment_id IS NOT NULL) +
-           (SELECT COUNT(*)
-              FROM check_executions e
-              JOIN runs r ON r.run_id = e.run_id
-             WHERE r.pause_scope_run_id = ?
-               AND r.status = 'pausing'
-               AND e.status = 'claimed') AS count`,
-      )
-      .get(pauseScopeRunId, pauseScopeRunId) as Row;
-    if (numberValue(live, "count") > 0) return [];
-
-    this.database.db
-      .query(
-        `UPDATE runs
-            SET status = 'paused', paused_at = ?,
-                runtime_revision = runtime_revision + 1,
-                updated_at = ?
-          WHERE pause_scope_run_id = ? AND status = 'pausing'`,
-      )
-      .run(at, at, pauseScopeRunId);
-    return pausing.map((row) => {
-      const affectedRunId = stringValue(row, "run_id");
-      const revision = numberValue(
-        this.runRow(affectedRunId),
-        "runtime_revision",
-      );
-      const sequence = this.appendEvent({
-        runId: affectedRunId,
-        graphId: stringValue(row, "graph_id"),
-        nodeId: null,
-        type: "run.paused",
-        summary: `Paused run ${affectedRunId} after quiescing.`,
-        payload: { pauseScopeRunId, revision },
-        at,
-      });
-      return { revision, event: this.getEvent(sequence) };
-    });
-  }
-
-  protected nodeRow(runId: string, nodeId: string): Row {
-    const row = this.database.db
-      .query(
-        `SELECT *
-           FROM node_runs
-          WHERE run_id = ? AND node_id = ?`,
-      )
-      .get(runId, nodeId) as Row | null;
-    if (!row) {
-      throw new BurnGraphError(
-        "NODE_NOT_FOUND",
-        `Unknown node ${nodeId} in ${runId}`,
-      );
-    }
-    return row;
-  }
-
-  private edgeRowsFrom(runId: string, nodeId: string): Row[] {
-    return this.database.db
-      .query(
-        `SELECT *
-           FROM edge_runs
-          WHERE run_id = ? AND from_node_id = ?
-          ORDER BY edge_id`,
-      )
-      .all(runId, nodeId) as Row[];
-  }
-
-  private insertEdge(runId: string, edge: GraphEdgeRef, at: string): void {
-    this.database.db
-      .query(
-        `INSERT INTO edge_runs (
-           run_id, edge_id, from_node_id, to_node_id, route, label,
-           max_traversals, traversals, status, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'pending', ?)`,
-      )
-      .run(
-        runId,
-        edge.id,
-        edge.from,
-        edge.to,
-        edge.route,
-        edge.label,
-        edge.maxTraversals,
-        at,
-      );
-  }
-
-  private nodesForRun(runId: string, spec: GraphSpec): readonly RuntimeNode[] {
-    const rows = this.database.db
-      .query("SELECT * FROM node_runs WHERE run_id = ?")
-      .all(runId) as Row[];
-    const byId = new Map(rows.map((row) => [stringValue(row, "node_id"), row]));
-    return spec.nodes.map((node) => {
-      const row = byId.get(node.id);
-      if (!row) {
-        throw new BurnGraphError(
-          "CORRUPT_STATE",
-          `Runtime is missing node ${node.id}`,
-        );
-      }
-      return this.runtimeNode(row);
-    });
-  }
-
-  private edgesForRun(runId: string): readonly RuntimeEdge[] {
-    return (
-      this.database.db
-        .query("SELECT * FROM edge_runs WHERE run_id = ? ORDER BY edge_id")
-        .all(runId) as Row[]
-    ).map((row) => ({
-      id: stringValue(row, "edge_id"),
-      from: stringValue(row, "from_node_id"),
-      to: stringValue(row, "to_node_id"),
-      route: optionalString(row, "route"),
-      label: optionalString(row, "label"),
-      maxTraversals: optionalNumber(row, "max_traversals"),
-      traversals: numberValue(row, "traversals"),
-      status: edgeStatus(row),
-      updatedAt: stringValue(row, "updated_at"),
-    }));
-  }
-
-  private runtimeNode(row: Row): RuntimeNode {
-    return {
-      id: stringValue(row, "node_id"),
-      type: stringValue(row, "node_type") as RuntimeNode["type"],
-      title: stringValue(row, "title"),
-      status: NodeStatusSchema.parse(stringValue(row, "status")),
-      attempt: numberValue(row, "attempt"),
-      assignmentId: optionalString(row, "assignment_id"),
-      actorId: optionalString(row, "actor_id"),
-      leaseExpiresAt: optionalString(row, "lease_expires_at"),
-      route: optionalString(row, "route"),
-      result: parseJson<CompletionInput>(optionalString(row, "result_json")),
-      checkpoint: parseJson<CheckpointInput>(
-        optionalString(row, "checkpoint_json"),
-      ),
-      lastError: optionalString(row, "last_error"),
-      updatedAt: stringValue(row, "updated_at"),
-    };
-  }
-
-  private summaryForRun(runId: string): GraphSummary {
-    const row = this.runRow(runId);
-    const graphId = stringValue(row, "graph_id");
-    const spec = this.loadGraph(
-      graphId,
-      numberValue(row, "spec_revision"),
-    ).spec;
-    const countRows = this.database.db
-      .query(
-        `SELECT status, COUNT(*) AS count
-           FROM node_runs
-          WHERE run_id = ?
-          GROUP BY status`,
-      )
-      .all(runId) as Row[];
-    const counts: { -readonly [Key in keyof GraphCounts]: GraphCounts[Key] } = {
-      total: spec.nodes.length,
-      pending: 0,
-      ready: 0,
-      running: 0,
-      waiting: 0,
-      blocked: 0,
-      done: 0,
-      failed: 0,
-      skipped: 0,
-      cancelled: 0,
-    };
-    for (const countRow of countRows) {
-      const status = NodeStatusSchema.parse(stringValue(countRow, "status"));
-      counts[status] = numberValue(countRow, "count");
-    }
-    const focusedNodeId = optionalString(row, "focused_node_id");
-    const focused = focusedNodeId
-      ? spec.nodes.find((node) => node.id === focusedNodeId)
-      : undefined;
-    const priority = stringValue(row, "priority");
-    if (!["low", "normal", "high"].includes(priority)) {
-      throw new BurnGraphError(
-        "CORRUPT_STATE",
-        `Run ${runId} has invalid priority ${priority}`,
-      );
-    }
-    return {
-      runId,
-      graphId,
-      title: spec.title,
-      goal: spec.goal,
-      specRevision: numberValue(row, "spec_revision"),
-      runtimeRevision: numberValue(row, "runtime_revision"),
-      status: GraphStatusSchema.parse(stringValue(row, "status")),
-      maxActive: spec.maxActive,
-      parentRunId: optionalString(row, "parent_run_id"),
-      parentNodeId: optionalString(row, "parent_node_id"),
-      rootRunId: stringValue(row, "root_run_id"),
-      depth: numberValue(row, "depth"),
-      priority: priority as GraphSummary["priority"],
-      focusedNodeId,
-      focusedNodeTitle: focused?.title ?? null,
-      counts,
-      createdAt: stringValue(row, "created_at"),
-      updatedAt: stringValue(row, "updated_at"),
-    };
-  }
-
-  private assignmentIdentity(assignmentId: string): AssignmentIdentity {
-    if (!z.string().uuid().safeParse(assignmentId).success) {
-      throw new BurnGraphError(
-        "ASSIGNMENT_NOT_FOUND",
-        "Assignment ID is not a valid handle",
-      );
-    }
-    const row = this.database.db
-      .query(
-        `SELECT assignment_id, run_id, node_id, attempt, actor_id, status,
-                result_json
-           FROM attempts
-          WHERE assignment_id = ?`,
-      )
-      .get(assignmentId) as Row | null;
-    if (!row) {
-      throw new BurnGraphError(
-        "ASSIGNMENT_NOT_FOUND",
-        `Unknown Assignment ${assignmentId}`,
-      );
-    }
-    return {
-      assignmentId: stringValue(row, "assignment_id"),
-      runId: stringValue(row, "run_id"),
-      nodeId: stringValue(row, "node_id"),
-      attempt: numberValue(row, "attempt"),
-      actorId: stringValue(row, "actor_id"),
-      status: stringValue(row, "status"),
-      result: parseJson<CompletionInput>(optionalString(row, "result_json")),
-    };
-  }
-
-  private requireMatchingReplay(
-    identity: AssignmentIdentity,
-    completion: CompletionInput,
-  ): void {
-    let candidate = completion;
-    const node = this.graphForRun(identity.runId).nodesById.get(
-      identity.nodeId,
-    );
-    if (
-      node?.type === "subgraph" &&
-      node.mode === "dynamic" &&
-      identity.result !== null
-    ) {
-      const storedOutput = DynamicSubgraphOutputSchema.safeParse(
-        identity.result.output,
-      );
-      const replayOutput = DynamicSubgraphOutputSchema.safeParse(
-        completion.output,
-      );
-      if (
-        storedOutput.success &&
-        replayOutput.success &&
-        storedOutput.data.children.length === replayOutput.data.children.length
-      ) {
-        candidate = {
-          ...completion,
-          output: {
-            children: replayOutput.data.children.map((child, index) => ({
-              ...child,
-              runId:
-                child.runId ?? storedOutput.data.children[index]?.runId,
-            })),
-          },
-        };
-      }
-    }
-    if (
-      identity.result === null ||
-      stableJson(identity.result) !== stableJson(candidate)
-    ) {
-      throw new BurnGraphError(
-        "ASSIGNMENT_INPUT_CONFLICT",
-        `Assignment ${identity.assignmentId} was already completed with different input`,
-        false,
-        { runId: identity.runId, nodeId: identity.nodeId },
-      );
-    }
-  }
-
-  private scheduleState(
-    assignments: readonly AssignmentPacket[],
-    runs: readonly GraphSummary[],
-  ): WorkSchedule["state"] {
-    if (assignments.length > 0) return "assigned";
-    if (runs.length === 0) return "waiting";
-    if (
-      runs.some(
-        (run) =>
-          run.status === "running" ||
-          run.status === "pausing" ||
-          run.status === "paused" ||
-          run.status === "cancelling",
-      )
-    ) {
-      const active = runs.filter(
-        (run) =>
-          run.status === "running" ||
-          run.status === "pausing" ||
-          run.status === "paused" ||
-          run.status === "cancelling",
-      );
-      return active.some(
-        (run) =>
-          run.counts.blocked > 0 &&
-          run.counts.ready === 0 &&
-          run.counts.running === 0,
-      )
-        ? "blocked"
-        : "waiting";
-    }
-    return runs.every(
-      (run) => run.status === "completed" || run.status === "cancelled",
-    )
-      ? "completed"
-      : "blocked";
-  }
-
-  private requireOwnedRunningNode(
-    runId: string,
-    nodeId: string,
-    actorId: string,
-    now: Date,
-    expectation?: AssignmentExpectation,
-  ): Row {
-    IdentifierSchema.parse(actorId);
-    const row = this.nodeRow(runId, nodeId);
-    if (stringValue(row, "status") !== "running") {
-      throw new BurnGraphError(
-        "NODE_NOT_RUNNING",
-        `Node ${nodeId} is ${stringValue(row, "status")}`,
-      );
-    }
-    if (optionalString(row, "actor_id") !== actorId) {
-      throw new BurnGraphError(
-        "NOT_NODE_OWNER",
-        `${actorId} does not own ${nodeId}`,
-      );
-    }
-    if (
-      expectation !== undefined &&
-      (optionalString(row, "assignment_id") !== expectation.assignmentId ||
-        numberValue(row, "attempt") !== expectation.attempt)
-    ) {
-      throw new BurnGraphError(
-        "ASSIGNMENT_STALE",
-        `Assignment ${expectation.assignmentId} is no longer active`,
-        false,
-        {
-          expectedAttempt: expectation.attempt,
-          currentAttempt: numberValue(row, "attempt"),
-        },
-      );
-    }
-    if (isExpired(optionalString(row, "lease_expires_at"), now)) {
-      throw new BurnGraphError(
-        "LEASE_EXPIRED",
-        `Claim for ${nodeId} has expired`,
-        true,
-      );
-    }
-    return row;
-  }
-
-  private takeAllForwardEdges(runId: string, nodeId: string, at: string): void {
-    this.database.db
-      .query(
-        `UPDATE edge_runs
-            SET status = 'taken', updated_at = ?
-          WHERE run_id = ? AND from_node_id = ? AND max_traversals IS NULL`,
-      )
-      .run(at, runId, nodeId);
-  }
-
-  protected selectDecisionEdge(
-    runId: string,
-    nodeId: string,
-    route: string,
-    at: string,
-  ): void {
-    this.database.db
-      .query(
-        `UPDATE edge_runs
-            SET status = CASE WHEN route = ? THEN 'taken' ELSE 'disabled' END,
-                updated_at = ?
-          WHERE run_id = ? AND from_node_id = ?`,
-      )
-      .run(route, at, runId, nodeId);
-  }
-
-  private ancestorGraphIds(runId: string): ReadonlySet<string> {
-    const graphIds = new Set<string>();
-    let current: string | null = runId;
-    while (current !== null) {
-      const row = this.runRow(current);
-      graphIds.add(stringValue(row, "graph_id"));
-      current = optionalString(row, "parent_run_id");
-    }
-    return graphIds;
-  }
-
-  private normalizedChildSet(
-    parentRunId: string,
-    nodeId: string,
-    descriptors: readonly ChildRunDescriptor[],
-  ): readonly NormalizedChildDescriptor[] {
-    const graph = this.graphForRun(parentRunId);
-    const node = graph.nodesById.get(nodeId);
-    if (!node || node.type !== "subgraph") {
-      throw new BurnGraphError(
-        "CHILD_RUN_CONFLICT",
-        `${nodeId} is not a Subgraph`,
-      );
-    }
-    const minimum = node.mode === "dynamic" ? (node.minChildren ?? 1) : 1;
-    const maximum =
-      node.mode === "dynamic" ? (node.maxChildren ?? 32) : 32;
-    if (descriptors.length < minimum || descriptors.length > maximum) {
-      throw new BurnGraphError(
-        "HIERARCHY_LIMIT",
-        `Subgraph ${nodeId} requires ${minimum}-${maximum} children`,
-        false,
-        { count: descriptors.length, minimum, maximum },
-      );
-    }
-
-    const parent = this.runRow(parentRunId);
-    const depth = numberValue(parent, "depth") + 1;
-    if (depth > this.config.maxHierarchyDepth) {
-      throw new BurnGraphError(
-        "HIERARCHY_LIMIT",
-        `Child depth ${depth} exceeds ${this.config.maxHierarchyDepth}`,
-        false,
-        { depth, limit: this.config.maxHierarchyDepth },
-      );
-    }
-    const rootRunId = stringValue(parent, "root_run_id");
-    const unfinished = this.database.db
-      .query(
-        `SELECT COUNT(*) AS count
-           FROM runs
-          WHERE root_run_id = ?
-            AND parent_run_id IS NOT NULL
-            AND status NOT IN ('completed', 'failed', 'cancelled')`,
-      )
-      .get(rootRunId) as Row;
-
-    const ancestors = this.ancestorGraphIds(parentRunId);
-    const runIds = new Set<string>();
-    let requestedDescendants = 0;
-    const normalized = descriptors.map((descriptor) => {
-      if (ancestors.has(descriptor.graphId)) {
-        throw new BurnGraphError(
-          "HIERARCHY_CYCLE",
-          `Graph ${descriptor.graphId} already exists in the Run ancestry`,
-          false,
-          { graphId: descriptor.graphId, parentRunId, nodeId },
-        );
-      }
-      const childGraph = this.loadGraph(
-        descriptor.graphId,
-        descriptor.revision,
-      ).spec;
-      this.authoring.validateCheckReferences(childGraph);
-      requestedDescendants +=
-        1 +
-        this.assertStaticDescendantsAvoidAncestors(
-          childGraph,
-          new Set([...ancestors, descriptor.graphId]),
-          depth,
-        );
-      const runId = descriptor.runId ?? `child-${crypto.randomUUID()}`;
-      IdentifierSchema.parse(runId);
-      if (runIds.has(runId)) {
-        throw new BurnGraphError(
-          "CHILD_RUN_CONFLICT",
-          `Child Run ${runId} is repeated in one child set`,
-          false,
-          { runId },
-        );
-      }
-      runIds.add(runId);
-      if (
-        this.database.db
-          .query("SELECT run_id FROM runs WHERE run_id = ?")
-          .get(runId)
-      ) {
-        throw new BurnGraphError(
-          "CHILD_RUN_CONFLICT",
-          `Child Run ${runId} already exists`,
-          false,
-          { runId },
-        );
-      }
-      return { ...descriptor, runId };
-    });
-    if (
-      numberValue(unfinished, "count") + requestedDescendants >
-      this.config.maxUnfinishedDescendants
-    ) {
-      throw new BurnGraphError(
-        "HIERARCHY_LIMIT",
-        `Root ${rootRunId} exceeds ${this.config.maxUnfinishedDescendants} unfinished descendants`,
-        false,
-        {
-          existing: numberValue(unfinished, "count"),
-          requested: requestedDescendants,
-          limit: this.config.maxUnfinishedDescendants,
-        },
-      );
-    }
-    return normalized;
-  }
-
-  private assertStaticDescendantsAvoidAncestors(
-    graph: GraphSpec,
-    ancestors: ReadonlySet<string>,
-    depth: number,
-  ): number {
-    let descendants = 0;
-    for (const node of graph.nodes) {
-      if (node.type !== "subgraph" || node.mode !== "static") continue;
-      for (const child of node.children ?? []) {
-        descendants += 1;
-        if (ancestors.has(child.graphId)) {
-          throw new BurnGraphError(
-            "HIERARCHY_CYCLE",
-            `Graph ${child.graphId} repeats in the attached ancestry`,
-            false,
-            { graphId: child.graphId, nodeId: node.id },
-          );
-        }
-        if (depth + 1 > this.config.maxHierarchyDepth) {
-          throw new BurnGraphError(
-            "HIERARCHY_LIMIT",
-            `Attached Graph exceeds depth ${this.config.maxHierarchyDepth}`,
-            false,
-            { depth: depth + 1, limit: this.config.maxHierarchyDepth },
-          );
-        }
-        const childGraph = this.loadGraph(
-          child.graphId,
-          child.revision,
-        ).spec;
-        descendants += this.assertStaticDescendantsAvoidAncestors(
-          childGraph,
-          new Set([...ancestors, child.graphId]),
-          depth + 1,
-        );
-      }
-    }
-    return descendants;
-  }
-
-  private insertChildRun(
-    parentRunId: string,
-    parentNodeId: string,
-    descriptor: NormalizedChildDescriptor,
-    position: number,
-    at: string,
-    runtimeChanges: RuntimeChange[],
-  ): void {
-    const parent = this.runRow(parentRunId);
-    const child = this.loadGraph(descriptor.graphId, descriptor.revision);
-    const rootRunId = stringValue(parent, "root_run_id");
-    const depth = numberValue(parent, "depth") + 1;
-    this.database.db
-      .query(
-        `INSERT INTO runs (
-           run_id, graph_id, spec_revision, status, runtime_revision,
-           focused_node_id, parent_run_id, parent_node_id, root_run_id,
-           depth, priority, pause_requested_at, paused_at,
-           cancel_requested_at, scheduler_ready_at, created_at, updated_at
-         ) VALUES (?, ?, ?, 'running', 1, NULL, ?, ?, ?, ?,
-                   'normal', NULL, NULL, NULL, ?, ?, ?)`,
-      )
-      .run(
-        descriptor.runId,
-        descriptor.graphId,
-        descriptor.revision,
-        parentRunId,
-        parentNodeId,
-        rootRunId,
-        depth,
-        at,
-        at,
-        at,
-      );
-    this.database.db
-      .query(
-        `INSERT INTO subgraph_links (
-           parent_run_id, parent_node_id, position, child_run_id,
-           child_graph_id, child_spec_revision, label, outcome,
-           created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-      )
-      .run(
-        parentRunId,
-        parentNodeId,
-        position,
-        descriptor.runId,
-        descriptor.graphId,
-        descriptor.revision,
-        descriptor.label ?? null,
-        at,
-        at,
-      );
-
-    for (const node of child.spec.nodes) {
-      this.database.db
-        .query(
-          `INSERT INTO node_runs (
-             run_id, node_id, node_type, title, status, attempt,
-             assignment_id, actor_id, lease_expires_at, heartbeat_at,
-             route, result_json, checkpoint_json, last_error, updated_at
-           ) VALUES (?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, NULL,
-                     NULL, NULL, NULL, NULL, ?)`,
-        )
-        .run(descriptor.runId, node.id, node.type, node.title, at);
-    }
-    for (const edge of [...child.forwardEdges, ...child.loopEdges]) {
-      this.insertEdge(descriptor.runId, edge, at);
-    }
-    const start = child.spec.nodes.find((node) => node.type === "start")!;
-    this.database.db
-      .query(
-        `UPDATE node_runs
-            SET status = 'done', attempt = 1, updated_at = ?
-          WHERE run_id = ? AND node_id = ?`,
-      )
-      .run(at, descriptor.runId, start.id);
-    this.takeAllForwardEdges(descriptor.runId, start.id, at);
-    const changes: Array<Record<string, unknown>> = [
-      { nodeId: start.id, status: "done" },
-    ];
-    this.cascade(child, descriptor.runId, at, changes);
-    this.driveStaticSubgraphs(
-      descriptor.runId,
-      at,
-      changes,
-      runtimeChanges,
-    );
-    this.refreshRunTerminalStatus(descriptor.runId, at);
-    const sequence = this.appendEvent({
-      runId: descriptor.runId,
-      graphId: descriptor.graphId,
-      nodeId: start.id,
-      type: "run.started",
-      summary: `Started ${child.spec.title} at revision ${descriptor.revision}.`,
-      payload: {
-        parentRunId,
-        parentNodeId,
-        rootRunId,
-        depth,
-        changes,
-      },
-      at,
-    });
-    runtimeChanges.push({
-      revision: numberValue(
-        this.runRow(descriptor.runId),
-        "runtime_revision",
-      ),
-      event: this.getEvent(sequence),
-    });
-  }
-
-  private sealSubgraphChildren(
-    parentRunId: string,
-    nodeId: string,
-    descriptors: readonly ChildRunDescriptor[],
-    at: string,
-    changes: Array<Record<string, unknown>>,
-    runtimeChanges: RuntimeChange[],
-  ): readonly ChildRunDescriptor[] {
-    const existing = this.database.db
-      .query(
-        `SELECT child_run_id
-           FROM subgraph_links
-          WHERE parent_run_id = ? AND parent_node_id = ?
-          ORDER BY position`,
-      )
-      .all(parentRunId, nodeId) as Row[];
-    if (existing.length > 0) {
-      throw new BurnGraphError(
-        "CHILD_RUN_CONFLICT",
-        `Subgraph ${parentRunId}/${nodeId} already sealed its child set`,
-      );
-    }
-
-    const normalized = this.normalizedChildSet(
-      parentRunId,
-      nodeId,
-      descriptors,
-    );
-    return this.attachNormalizedSubgraphChildren(
-      parentRunId,
-      nodeId,
-      normalized,
-      at,
-      changes,
-      runtimeChanges,
-    );
-  }
-
-  private attachNormalizedSubgraphChildren(
-    parentRunId: string,
-    nodeId: string,
-    normalized: readonly NormalizedChildDescriptor[],
-    at: string,
-    changes: Array<Record<string, unknown>>,
-    runtimeChanges: RuntimeChange[],
-  ): readonly NormalizedChildDescriptor[] {
-    normalized.forEach((descriptor, position) => {
-      this.insertChildRun(
-        parentRunId,
-        nodeId,
-        descriptor,
-        position,
-        at,
-        runtimeChanges,
-      );
-    });
-    this.database.db
-      .query(
-        `UPDATE node_runs
-            SET status = 'waiting', attempt = CASE
-                  WHEN attempt = 0 THEN 1 ELSE attempt END,
-                assignment_id = NULL, actor_id = NULL,
-                lease_expires_at = NULL, heartbeat_at = NULL,
-                updated_at = ?
-          WHERE run_id = ? AND node_id = ?`,
-      )
-      .run(at, parentRunId, nodeId);
-    changes.push({
-      nodeId,
-      status: "waiting",
-      children: normalized.map((descriptor) => descriptor.runId),
-    });
-    runtimeChanges.push(
-      ...this.settleSubgraphIfTerminal(
-        parentRunId,
-        nodeId,
-        at,
-        changes,
-        false,
-      ),
-    );
-    return normalized;
-  }
-
-  protected driveStaticSubgraphs(
-    runId: string,
-    at: string,
-    changes: Array<Record<string, unknown>>,
-    runtimeChanges: RuntimeChange[],
-  ): void {
-    const run = this.runRow(runId);
-    if (stringValue(run, "status") !== "running") return;
-    const graph = this.graphForRun(runId);
-    for (const node of graph.spec.nodes) {
-      if (
-        node.type !== "subgraph" ||
-        node.mode !== "static" ||
-        stringValue(this.nodeRow(runId, node.id), "status") !== "ready"
-      ) {
-        continue;
-      }
-      this.sealSubgraphChildren(
-        runId,
-        node.id,
-        node.children ?? [],
-        at,
-        changes,
-        runtimeChanges,
-      );
-    }
-  }
-
-  private settleSubgraphIfTerminal(
-    parentRunId: string,
-    nodeId: string,
-    at: string,
-    changes: Array<Record<string, unknown>>,
-    emitEvent = true,
-  ): readonly RuntimeChange[] {
-    const node = this.nodeRow(parentRunId, nodeId);
-    if (stringValue(node, "status") !== "waiting") return [];
-    const children = this.database.db
-      .query(
-        `SELECT l.child_run_id, r.status
-           FROM subgraph_links l
-           JOIN runs r ON r.run_id = l.child_run_id
-          WHERE l.parent_run_id = ? AND l.parent_node_id = ?
-          ORDER BY l.position`,
-      )
-      .all(parentRunId, nodeId) as Row[];
-    if (children.length === 0) return [];
-    const statuses = children.map((child) => stringValue(child, "status"));
-    if (
-      !statuses.every((status) =>
-        ["completed", "failed", "cancelled"].includes(status),
-      )
-    ) {
-      return [];
-    }
-    let outcome: "success" | "failure" | "cancelled" | null = null;
-    if (statuses.includes("failed")) outcome = "failure";
-    else if (statuses.includes("cancelled")) outcome = "cancelled";
-    else if (statuses.every((status) => status === "completed")) {
-      outcome = "success";
-    }
-    if (outcome === null) return [];
-
-    this.database.db
-      .query(
-        `UPDATE subgraph_links
-            SET outcome = (
-                  SELECT status FROM runs
-                   WHERE runs.run_id = subgraph_links.child_run_id
-                ),
-                updated_at = ?
-          WHERE parent_run_id = ? AND parent_node_id = ?`,
-      )
-      .run(at, parentRunId, nodeId);
-    const selected = this.edgeRowsFrom(parentRunId, nodeId).find(
-      (edge) => optionalString(edge, "route") === outcome,
-    );
-    const run = this.runRow(parentRunId);
-    const nestedChanges: RuntimeChange[] = [];
-    if (!selected) {
-      this.database.db
-        .query(
-          `UPDATE node_runs
-              SET status = 'failed', route = ?, last_error = ?,
-                  updated_at = ?
-            WHERE run_id = ? AND node_id = ?`,
-        )
-        .run(
-          outcome,
-          `Missing declared ${outcome} route`,
-          at,
-          parentRunId,
-          nodeId,
-        );
-      this.database.db
-        .query(
-          "UPDATE runs SET status = 'failed', focused_node_id = NULL, updated_at = ? WHERE run_id = ?",
-        )
-        .run(at, parentRunId);
-    } else {
-      const result: CompletionInput = {
-        summary: `Child Runs settled as ${outcome}.`,
-        evidence: [],
-        route: outcome,
-      };
-      this.database.db
-        .query(
-          `UPDATE node_runs
-              SET status = 'done', route = ?, result_json = ?,
-                  updated_at = ?
-            WHERE run_id = ? AND node_id = ?`,
-        )
-        .run(outcome, json(result), at, parentRunId, nodeId);
-      this.selectDecisionEdge(parentRunId, nodeId, outcome, at);
-      const graph = this.graphForRun(parentRunId);
-      this.cascade(graph, parentRunId, at, changes);
-      this.driveStaticSubgraphs(
-        parentRunId,
-        at,
-        changes,
-        nestedChanges,
-      );
-      this.refreshRunTerminalStatus(parentRunId, at);
-    }
-    changes.push({ nodeId, status: selected ? "done" : "failed", outcome });
-    if (!emitEvent) return nestedChanges;
-    const revision = this.bumpRun(parentRunId, at, undefined, null);
-    const sequence = this.appendEvent({
-      runId: parentRunId,
-      graphId: stringValue(run, "graph_id"),
-      nodeId,
-      type: selected ? "subgraph.settled" : "subgraph.failed",
-      summary: selected
-        ? `Subgraph ${nodeId} settled as ${outcome}.`
-        : `Subgraph ${nodeId} has no ${outcome} route.`,
-      payload: {
-        outcome,
-        children: children.map((child) => ({
-          runId: stringValue(child, "child_run_id"),
-          status: stringValue(child, "status"),
-        })),
-        revision,
-      },
-      at,
-    });
-    return [
-      ...nestedChanges,
-      { revision, event: this.getEvent(sequence) },
-    ];
-  }
-
-  protected settleAncestors(
-    childRunId: string,
-    at: string,
-  ): readonly RuntimeChange[] {
-    const settled: RuntimeChange[] = [];
-    let current = this.runRow(childRunId);
-    while (optionalString(current, "parent_run_id") !== null) {
-      const parentRunId = optionalString(current, "parent_run_id")!;
-      const parentNodeId = optionalString(current, "parent_node_id")!;
-      const payloadChanges: Array<Record<string, unknown>> = [];
-      const changes = this.settleSubgraphIfTerminal(
-        parentRunId,
-        parentNodeId,
-        at,
-        payloadChanges,
-      );
-      if (changes.length === 0) break;
-      settled.push(...changes);
-      current = this.runRow(parentRunId);
-    }
-    return settled;
-  }
-
-  protected cascade(
-    graph: ValidatedGraph,
-    runId: string,
-    at: string,
-    changes: Array<Record<string, unknown>>,
-  ): void {
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const specNode of graph.spec.nodes) {
-        if (specNode.type === "start") continue;
-        const row = this.nodeRow(runId, specNode.id);
-        if (stringValue(row, "status") !== "pending") continue;
-        const incoming = this.database.db
-          .query(
-            `SELECT *
-               FROM edge_runs
-              WHERE run_id = ? AND to_node_id = ?
-                AND max_traversals IS NULL`,
-          )
-          .all(runId, specNode.id) as Row[];
-        if (incoming.length === 0) continue;
-        const statuses = incoming.map(edgeStatus);
-        if (statuses.includes("pending")) continue;
-        if (statuses.every((status) => status === "disabled")) {
-          this.database.db
-            .query(
-              `UPDATE node_runs
-                  SET status = 'skipped', updated_at = ?
-                WHERE run_id = ? AND node_id = ?`,
-            )
-            .run(at, runId, specNode.id);
-          this.database.db
-            .query(
-              `UPDATE edge_runs
-                  SET status = 'disabled', updated_at = ?
-                WHERE run_id = ? AND from_node_id = ? AND status = 'pending'`,
-            )
-            .run(at, runId, specNode.id);
-          changes.push({ nodeId: specNode.id, status: "skipped" });
-          changed = true;
-          continue;
-        }
-        if (statuses.some((status) => status === "taken")) {
-          if (specNode.type === "join" || specNode.type === "end") {
-            this.database.db
-              .query(
-                `UPDATE node_runs
-                    SET status = 'done', attempt = 1, updated_at = ?
-                  WHERE run_id = ? AND node_id = ?`,
-              )
-              .run(at, runId, specNode.id);
-            if (specNode.type === "join") {
-              this.takeAllForwardEdges(runId, specNode.id, at);
-            }
-            changes.push({ nodeId: specNode.id, status: "done" });
-          } else {
-            this.database.db
-              .query(
-                `UPDATE node_runs
-                    SET status = 'ready', updated_at = ?
-                  WHERE run_id = ? AND node_id = ?`,
-              )
-              .run(at, runId, specNode.id);
-            changes.push({ nodeId: specNode.id, status: "ready" });
-          }
-          changed = true;
-        }
-      }
-    }
-  }
-
-  private resetLoop(
-    graph: ValidatedGraph,
-    runId: string,
-    edgeId: string,
-    sourceId: string,
-    targetId: string,
-    at: string,
-    changes: Array<Record<string, unknown>>,
-  ): void {
-    const body = loopBodyNodeIds(graph, sourceId, targetId);
-    const reachableFromBody = new Set(body);
-    const queue = [...body];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      for (const edge of graph.forwardEdges) {
-        if (edge.from !== current || reachableFromBody.has(edge.to)) continue;
-        reachableFromBody.add(edge.to);
-        queue.push(edge.to);
-      }
-    }
-    const resetNodes = new Set(body);
-    for (const nodeId of reachableFromBody) {
-      if (
-        stringValue(this.nodeRow(runId, nodeId), "status") === "skipped"
-      ) {
-        resetNodes.add(nodeId);
-      }
-    }
-    const placeholders = [...resetNodes].map(() => "?").join(", ");
-    this.database.db
-      .query(
-        `UPDATE node_runs
-            SET status = 'pending', assignment_id = NULL, actor_id = NULL,
-                lease_expires_at = NULL, heartbeat_at = NULL, route = NULL,
-                result_json = NULL, checkpoint_json = NULL, last_error = NULL,
-                updated_at = ?
-          WHERE run_id = ? AND node_id IN (${placeholders})`,
-      )
-      .run(at, runId, ...resetNodes);
-    this.database.db
-      .query(
-        `UPDATE edge_runs
-            SET status = 'pending', updated_at = ?
-          WHERE run_id = ? AND from_node_id IN (${placeholders})`,
-      )
-      .run(at, runId, ...resetNodes);
-    this.database.db
-      .query(
-        `UPDATE edge_runs
-            SET traversals = traversals + 1, status = 'pending', updated_at = ?
-          WHERE run_id = ? AND edge_id = ?`,
-      )
-      .run(at, runId, edgeId);
-    this.database.db
-      .query(
-        `UPDATE node_runs
-            SET status = 'ready', updated_at = ?
-          WHERE run_id = ? AND node_id = ?`,
-      )
-      .run(at, runId, targetId);
-    changes.push({
-      loop: `${sourceId}->${targetId}`,
-      resetNodes: [...resetNodes],
-      ready: targetId,
-    });
-  }
-
-  protected refreshRunTerminalStatus(runId: string, at: string): void {
-    const failed = this.database.db
-      .query(
-        `SELECT COUNT(*) AS count
-           FROM node_runs
-          WHERE run_id = ? AND status = 'failed'`,
-      )
-      .get(runId) as Row;
-    if (numberValue(failed, "count") > 0) {
-      this.database.db
-        .query("UPDATE runs SET status = 'failed', updated_at = ? WHERE run_id = ?")
-        .run(at, runId);
-      return;
-    }
-    const unfinished = this.database.db
-      .query(
-        `SELECT COUNT(*) AS count
-           FROM node_runs
-          WHERE run_id = ?
-            AND status NOT IN ('done', 'skipped')`,
-      )
-      .get(runId) as Row;
-    const end = this.database.db
-      .query(
-        `SELECT status
-           FROM node_runs
-          WHERE run_id = ? AND node_type = 'end'`,
-      )
-      .get(runId) as Row;
-    if (
-      numberValue(unfinished, "count") === 0 &&
-      stringValue(end, "status") === "done"
-    ) {
-      this.database.db
-        .query(
-          "UPDATE runs SET status = 'completed', focused_node_id = NULL, updated_at = ? WHERE run_id = ?",
-        )
-        .run(at, runId);
-    }
-  }
-
-  private releaseAssignmentResources(assignmentId: string): void {
-    this.database.db
-      .query(
-        `DELETE FROM resource_locks
-          WHERE owner_kind = 'assignment' AND owner_id = ?`,
-      )
-      .run(assignmentId);
-  }
-
-  private stopNode(
-    reference: string,
-    nodeId: string,
-    actorId: string,
-    requestedStatus: "ready" | "blocked" | "failed",
-    reason: string,
-    retry: boolean,
-    expectation?: AssignmentExpectation,
-  ): MutationResult<RuntimeNode> {
-    if (reason.trim().length === 0) {
-      throw new BurnGraphError("REASON_REQUIRED", "A non-empty reason is required");
-    }
-    const runId = this.resolveRun(reference);
-    const graph = this.graphForRun(runId);
-    const nodeSpec = graph.nodesById.get(nodeId);
-    if (!nodeSpec) throw new BurnGraphError("NODE_NOT_FOUND", `Unknown node ${nodeId}`);
-    const now = this.now();
-    const at = now.toISOString();
-    const stopped = this.database.immediate(() => {
-      const node = this.requireOwnedRunningNode(
-        runId,
-        nodeId,
-        actorId,
-        now,
-        expectation,
-      );
-      const attempt = numberValue(node, "attempt");
-      const assignmentId = optionalString(node, "assignment_id");
-      const shouldRetry =
-        requestedStatus === "failed" && retry && attempt < nodeSpec.maxAttempts;
-      const status = shouldRetry ? "ready" : requestedStatus;
-      const attemptStatus =
-        requestedStatus === "ready" ? "released" : requestedStatus;
-      this.database.db
-        .query(
-          `UPDATE attempts
-              SET status = ?, finished_at = ?
-            WHERE run_id = ? AND node_id = ? AND attempt = ?`,
-        )
-        .run(attemptStatus, at, runId, nodeId, attempt);
-      if (assignmentId !== null) {
-        this.releaseAssignmentResources(assignmentId);
-      }
-      this.database.db
-        .query(
-          `UPDATE node_runs
-              SET status = ?, assignment_id = NULL, actor_id = NULL,
-                  lease_expires_at = NULL, heartbeat_at = NULL,
-                  last_error = ?, checkpoint_json = NULL, updated_at = ?
-            WHERE run_id = ? AND node_id = ?`,
-        )
-        .run(status, reason, at, runId, nodeId);
-      this.database.db
-        .query(
-          "DELETE FROM actor_focus WHERE actor_id = ? AND run_id = ? AND node_id = ?",
-        )
-        .run(actorId, runId, nodeId);
-      const run = this.runRow(runId);
-      let failureCleanup: {
-        readonly changes: readonly RuntimeChange[];
-        readonly cancelledNodeCount: number;
-        readonly cancelledNodes: readonly string[];
-      } = {
-        changes: [],
-        cancelledNodeCount: 0,
-        cancelledNodes: [],
-      };
-      if (status === "failed") {
-        this.database.db
-          .query(
-            "UPDATE runs SET status = 'failed', focused_node_id = NULL, updated_at = ? WHERE run_id = ?",
-          )
-          .run(at, runId);
-        failureCleanup = this.cancelFailureRemainder(runId, at);
-      }
-      const revision = this.bumpRun(runId, at, undefined, null);
-      const type =
-        status === "ready"
-          ? shouldRetry
-            ? "node.retry_scheduled"
-            : "node.released"
-          : `node.${status}`;
-      const sequence = this.appendEvent({
-        runId,
-        graphId: stringValue(run, "graph_id"),
-        nodeId,
-        type,
-        summary: reason,
-        payload: {
-          actorId,
-          attempt,
-          status,
-          retry: shouldRetry,
-          cancelledNodeCount: failureCleanup.cancelledNodeCount,
-          cancelledNodes: failureCleanup.cancelledNodes,
-          revision,
-        },
-        at,
-      });
-      const changes: RuntimeChange[] = [
-        ...failureCleanup.changes,
-        { revision, event: this.getEvent(sequence) },
-      ];
-      if (status === "failed") {
-        changes.push(...this.settleAncestors(runId, at));
-      }
-      return { sequence, changes };
-    });
-    const quiesced = this.database.immediate(() =>
-      this.quiescePauseContainingRun(runId, at),
-    );
-    return {
-      ...this.mutationNode(runId, nodeId, stopped.sequence),
-      changes: [...stopped.changes, ...quiesced],
-    };
-  }
-
-  private cancelFailureRemainder(
-    runId: string,
-    at: string,
-  ): {
-    readonly changes: readonly RuntimeChange[];
-    readonly cancelledNodeCount: number;
-    readonly cancelledNodes: readonly string[];
-  } {
-    const tree = this.descendantRunRows(runId);
-    const unfinishedDescendants = tree.filter(
-      (row) =>
-        stringValue(row, "run_id") !== runId &&
-        !["completed", "failed", "cancelled"].includes(
-          stringValue(row, "status"),
-        ),
-    );
-    const affectedRunIds = [
-      runId,
-      ...unfinishedDescendants.map((row) => stringValue(row, "run_id")),
-    ];
-    const placeholders = affectedRunIds.map(() => "?").join(", ");
-    const cancelledRows = this.database.db
-      .query(
-        `SELECT run_id, node_id
-           FROM node_runs
-          WHERE run_id IN (${placeholders})
-            AND status IN
-                ('pending', 'ready', 'running', 'waiting', 'blocked')
-          ORDER BY run_id, node_id`,
-      )
-      .all(...affectedRunIds) as Row[];
-    this.database.db
-      .query(
-        `UPDATE attempts
-            SET status = 'cancelled', finished_at = ?
-          WHERE run_id IN (${placeholders}) AND finished_at IS NULL`,
-      )
-      .run(at, ...affectedRunIds);
-    this.database.db
-      .query(
-        `UPDATE node_runs
-            SET status = CASE
-                  WHEN status IN
-                       ('pending', 'ready', 'running', 'waiting', 'blocked')
-                  THEN 'cancelled' ELSE status END,
-                assignment_id = NULL, actor_id = NULL,
-                lease_expires_at = NULL, heartbeat_at = NULL,
-                updated_at = ?
-          WHERE run_id IN (${placeholders})`,
-      )
-      .run(at, ...affectedRunIds);
-    this.database.db
-      .query(`DELETE FROM actor_focus WHERE run_id IN (${placeholders})`)
-      .run(...affectedRunIds);
-    this.database.db
-      .query(
-        `DELETE FROM resource_locks
-          WHERE owner_kind = 'assignment'
-            AND run_id IN (${placeholders})`,
-      )
-      .run(...affectedRunIds);
-
-    const descendantIds = unfinishedDescendants.map((row) =>
-      stringValue(row, "run_id"),
-    );
-    const runtimeChanges: RuntimeChange[] = [];
-    if (descendantIds.length > 0) {
-      const descendantPlaceholders = descendantIds.map(() => "?").join(", ");
-      this.database.db
-        .query(
-          `UPDATE runs
-              SET status = 'cancelled', cancel_requested_at = ?,
-                  focused_node_id = NULL, runtime_revision = runtime_revision + 1,
-                  updated_at = ?
-            WHERE run_id IN (${descendantPlaceholders})`,
-        )
-        .run(at, at, ...descendantIds);
-      this.database.db
-        .query(
-          `UPDATE subgraph_links
-              SET outcome = 'cancelled', updated_at = ?
-            WHERE child_run_id IN (${descendantPlaceholders})`,
-        )
-        .run(at, ...descendantIds);
-      for (const row of unfinishedDescendants) {
-        const affectedRunId = stringValue(row, "run_id");
-        const revision = numberValue(
-          this.runRow(affectedRunId),
-          "runtime_revision",
-        );
-        const sequence = this.appendEvent({
-          runId: affectedRunId,
-          graphId: stringValue(row, "graph_id"),
-          nodeId: null,
-          type: "run.cancelled",
-          summary: `Cancelled ${affectedRunId} after ancestor failure.`,
-          payload: { failureRunId: runId, revision },
-          at,
-        });
-        runtimeChanges.push({
-          revision,
-          event: this.getEvent(sequence),
-        });
-      }
-    }
-
-    return {
-      changes: runtimeChanges,
-      cancelledNodeCount: cancelledRows.length,
-      cancelledNodes: cancelledRows
-        .slice(0, 32)
-        .map(
-          (row) =>
-            `${stringValue(row, "run_id")}/${stringValue(row, "node_id")}`,
-        ),
-    };
-  }
-
-  protected bumpRun(
-    runId: string,
-    at: string,
-    status?: GraphStatus,
-    focusedNodeId?: string | null,
-  ): number {
-    const assignments = ["runtime_revision = runtime_revision + 1", "updated_at = ?"];
-    const values: Array<string | null> = [at];
-    if (status !== undefined) {
-      assignments.push("status = ?");
-      values.push(status);
-    }
-    if (focusedNodeId !== undefined) {
-      assignments.push("focused_node_id = ?");
-      values.push(focusedNodeId);
-    }
-    this.database.db
-      .query(`UPDATE runs SET ${assignments.join(", ")} WHERE run_id = ?`)
-      .run(...values, runId);
-    return numberValue(this.runRow(runId), "runtime_revision");
-  }
-
-  protected appendEvent(input: {
-    readonly runId: string;
-    readonly graphId: string;
-    readonly nodeId: string | null;
-    readonly type: string;
-    readonly summary: string;
-    readonly payload: Readonly<Record<string, unknown>>;
-    readonly at: string;
-  }): number {
-    const result = this.database.db
-      .query(
-        `INSERT INTO events (
-           run_id, graph_id, node_id, type, summary, payload_json, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.runId,
-        input.graphId,
-        input.nodeId,
-        input.type,
-        input.summary,
-        json(input.payload),
-        input.at,
-      );
-    return Number(result.lastInsertRowid);
-  }
-
-  protected getEvent(sequence: number): GraphEvent {
-    const row = this.database.db
-      .query("SELECT * FROM events WHERE sequence = ?")
-      .get(sequence) as Row | null;
-    if (!row) {
-      throw new BurnGraphError("EVENT_NOT_FOUND", `Missing event ${sequence}`);
-    }
-    return this.eventFromRow(row);
-  }
-
-  private eventFromRow(row: Row): GraphEvent {
-    return {
-      sequence: numberValue(row, "sequence"),
-      runId: stringValue(row, "run_id"),
-      graphId: stringValue(row, "graph_id"),
-      nodeId: optionalString(row, "node_id"),
-      type: stringValue(row, "type"),
-      summary: stringValue(row, "summary"),
-      payload:
-        parseJson<Record<string, unknown>>(
-          optionalString(row, "payload_json"),
-        ) ?? {},
-      createdAt: stringValue(row, "created_at"),
-    };
-  }
-
-  private recentEventsForRun(
-    runId: string,
-    limit: number,
-  ): readonly GraphEvent[] {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
-      throw new BurnGraphError("INVALID_LIMIT", "Event limit must be 1-1000");
-    }
-    const rows = this.database.db
-      .query(
-        `SELECT *
-           FROM events
-          WHERE run_id = ?
-          ORDER BY sequence DESC
-          LIMIT ?`,
-      )
-      .all(runId, limit) as Row[];
-    return rows.reverse().map((row) => this.eventFromRow(row));
-  }
-
-  private assignmentPacket(
-    runId: string,
-    nodeId: string,
-    actorId: string,
-  ): AssignmentPacket {
-    const summary = this.summaryForRun(runId);
-    const graph = this.graphForRun(runId);
-    const nodeRuntime = this.runtimeNode(this.nodeRow(runId, nodeId));
-    const nodeSpec = graph.nodesById.get(nodeId);
-    if (
-      !nodeSpec ||
-      !isAssignableNode(nodeSpec)
-    ) {
-      throw new BurnGraphError("NODE_NOT_FOUND", `Unknown assignment ${nodeId}`);
-    }
-    if (
-      nodeRuntime.actorId !== actorId ||
-      nodeRuntime.assignmentId === null ||
-      nodeRuntime.leaseExpiresAt === null
-    ) {
-      throw new BurnGraphError(
-        "NOT_NODE_OWNER",
-        `${actorId} does not own ${nodeId}`,
-      );
-    }
-    const incoming = this.database.db
-      .query(
-        `SELECT from_node_id
-           FROM edge_runs
-          WHERE run_id = ? AND to_node_id = ?
-          ORDER BY edge_id`,
-      )
-      .all(runId, nodeId) as Row[];
-    const predecessorIds = [
-      ...new Set(
-        incoming.map((edge) => stringValue(edge, "from_node_id")),
-      ),
-    ];
-    const predecessors = predecessorIds
-      .map((predecessorId) => {
-        const runtime = this.runtimeNode(
-          this.nodeRow(runId, predecessorId),
-        );
-        const spec = graph.nodesById.get(predecessorId);
-        if (!spec) return null;
-        const previous =
-          runtime.result === null
-            ? this.latestAttemptCompletion(runId, runtime.id)
-            : {
-                attempt: runtime.attempt,
-                route: runtime.route,
-                completion: runtime.result,
-              };
-        return {
-          nodeId: runtime.id,
-          title: spec.title,
-          status: runtime.status,
-          attempt: previous?.attempt ?? runtime.attempt,
-          route: previous?.route ?? runtime.route,
-          summary: previous?.completion.summary ?? null,
-          evidence: previous?.completion.evidence ?? [],
-        };
-      })
-      .filter((value): value is NonNullable<typeof value> => value !== null);
-    return {
-      schemaVersion: 1,
-      assignmentId: nodeRuntime.assignmentId,
-      projectId: this.config.projectId,
-      graph: {
-        runId,
-        graphId: summary.graphId,
-        title: summary.title,
-        goal: summary.goal,
-        specRevision: summary.specRevision,
-        runtimeRevision: summary.runtimeRevision,
-        progress: summary.counts,
-      },
-      node: {
-        id: nodeId,
-        type: nodeSpec.type,
-        title: nodeSpec.title,
-        attempt: nodeRuntime.attempt,
-        actorHint: nodeSpec.actorHint,
-        prompt: nodeSpec.prompt,
-        routes: this.edgeRowsFrom(runId, nodeId)
-          .filter((edge) => optionalString(edge, "route") !== null)
-          .map((edge) => ({
-            route: stringValue(edge, "route"),
-            to: stringValue(edge, "to_node_id"),
-            label: optionalString(edge, "label"),
-            remainingTraversals:
-              optionalNumber(edge, "max_traversals") === null
-                ? null
-                : optionalNumber(edge, "max_traversals")! -
-                  numberValue(edge, "traversals"),
-          })),
-      },
-      context: { predecessors },
-      claim: {
-        actorId,
-        leaseExpiresAt: nodeRuntime.leaseExpiresAt,
-      },
-      returnProtocol: {
-        checkpoint: `burn-graph recover checkpoint --assignment ${nodeRuntime.assignmentId} --input -`,
-        complete: `burn-graph done --assignment ${nodeRuntime.assignmentId} --input -`,
-        block: `burn-graph recover block --assignment ${nodeRuntime.assignmentId} --reason <text>`,
-        fail: `burn-graph recover fail --assignment ${nodeRuntime.assignmentId} --reason <text>`,
-      },
-    };
-  }
-
-  private latestAttemptCompletion(
-    runId: string,
-    nodeId: string,
-  ): {
-    readonly attempt: number;
-    readonly route: string | null;
-    readonly completion: CompletionInput;
-  } | null {
-    const row = this.database.db
-      .query(
-        `SELECT attempt, route, result_json
-           FROM attempts
-          WHERE run_id = ? AND node_id = ? AND result_json IS NOT NULL
-          ORDER BY attempt DESC
-          LIMIT 1`,
-      )
-      .get(runId, nodeId) as Row | null;
-    if (!row) return null;
-    const completion = parseJson<CompletionInput>(
-      optionalString(row, "result_json"),
-    );
-    if (!completion) return null;
-    return {
-      attempt: numberValue(row, "attempt"),
-      route: optionalString(row, "route"),
-      completion,
-    };
-  }
-
-  private mutationSnapshot(
-    runId: string,
-    sequence: number,
-  ): MutationResult<GraphSnapshot> {
-    const snapshot = this.getSnapshot(runId);
-    return {
-      revision: snapshot.summary.runtimeRevision,
-      event: this.getEvent(sequence),
-      value: snapshot,
-    };
-  }
-
-  private mutationNode(
-    runId: string,
-    nodeId: string,
-    sequence: number,
-  ): MutationResult<RuntimeNode> {
-    return {
-      revision: this.summaryForRun(runId).runtimeRevision,
-      event: this.getEvent(sequence),
-      value: this.runtimeNode(this.nodeRow(runId, nodeId)),
-    };
-  }
-}
-
-function edgeStatus(row: Row): RuntimeEdge["status"] {
-  const value = stringValue(row, "status");
-  if (value === "pending" || value === "taken" || value === "disabled") {
-    return value;
-  }
-  throw new BurnGraphError("CORRUPT_STATE", `Unknown edge status ${value}`);
 }
