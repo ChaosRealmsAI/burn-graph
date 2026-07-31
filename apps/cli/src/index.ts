@@ -12,9 +12,7 @@ import {
   inspectRenderCapability,
 } from "@burn-graph/render";
 import { SystemNodeDriver } from "@burn-graph/system-driver";
-import {
-} from "@burn-graph/templates";
-import { Command, Option } from "commander";
+import { Command } from "commander";
 import { ZodError } from "zod";
 
 import {
