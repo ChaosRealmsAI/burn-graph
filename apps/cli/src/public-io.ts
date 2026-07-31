@@ -77,16 +77,70 @@ function outputRootCandidates(rootInput?: string): readonly string[] {
   return [...candidates].sort((left, right) => right.length - left.length);
 }
 
-function sanitizePublicString(
-  input: string,
-  roots: readonly string[],
-): string {
+// P010 draws one line through the public envelope.
+//
+// A product path field is the CLI's own statement about where something lives,
+// so it must be project-relative or omitted. Everything else in `data` is user
+// content — Graph prompt contracts, completion summaries, evidence, the
+// node-specific output a caller sent through `done` — persisted verbatim and read
+// back to be acted on. This printer must return it byte for byte.
+//
+// The earlier printer masked every string in the tree, so a persisted objective
+// of `Read /opt/acme/spec.txt unchanged` came back as `Read <absolute-path>
+// unchanged`: a durable user fact silently rewritten on the way out. P010's own
+// wording allows relativizing the product's paths and forbids exactly that.
+//
+// The allowlist is positional rather than keyed by name because `done --input`
+// accepts arbitrary node-specific JSON: a key called `path` or `root` can be user
+// content at an unpredictable depth. `*` matches one array index.
+const PRODUCT_PATH_FIELDS: readonly (readonly string[])[] = [
+  ["data", "root"],
+  ["data", "path"],
+  ["data", "artifact"],
+  ["data", "projectRoot"],
+  ["data", "logFile"],
+  ["data", "graphs", "*", "path"],
+];
+
+// Diagnostics repeat whatever an underlying Error said — `ENOENT ... open
+// '/Users/...'` — and the shape is not knowable in advance, so the whole error
+// object stays masked. An error message is bounded explanation, never a
+// persisted user fact, so masking it corrupts nothing a caller can read back.
+const DIAGNOSTIC_SUBTREES: readonly (readonly string[])[] = [["error"]];
+
+function absoluteLike(value: string): boolean {
+  return (
+    path.isAbsolute(value) ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.startsWith("\\\\")
+  );
+}
+
+function replaceKnownRoots(input: string, roots: readonly string[]): string {
   let output = input;
   for (const root of roots) {
     output = output.replaceAll(root, ".");
     const normalized = root.replaceAll("\\", "/");
     if (normalized !== root) output = output.replaceAll(normalized, ".");
   }
+  return output;
+}
+
+function relativizeProductPath(
+  input: string,
+  roots: readonly string[],
+): string {
+  const output = replaceKnownRoots(input, roots);
+  // A path the product generated outside every known root cannot be safely
+  // relativized, so P010 requires omitting it rather than publishing it.
+  return absoluteLike(output) ? "<absolute-path>" : output;
+}
+
+function maskDiagnosticText(
+  input: string,
+  roots: readonly string[],
+): string {
+  let output = replaceKnownRoots(input, roots);
   output = output.replace(
     /(["'])(?:\/|[A-Za-z]:[\\/]|\\\\)[^"' \r\n]*\1/g,
     (_match, quote: string) => `${quote}<absolute-path>${quote}`,
@@ -95,28 +149,56 @@ function sanitizePublicString(
     /(^|[\s(=])(?:\/[^ \t\r\n,;)\]}]+|[A-Za-z]:[\\/][^ \t\r\n,;)\]}]+)/g,
     (_match, prefix: string) => `${prefix}<absolute-path>`,
   );
-  if (
-    path.isAbsolute(output) ||
-    /^[A-Za-z]:[\\/]/.test(output) ||
-    output.startsWith("\\\\")
-  ) {
-    return "<absolute-path>";
-  }
-  return output;
+  return absoluteLike(output) ? "<absolute-path>" : output;
+}
+
+function positionMatches(
+  position: readonly string[],
+  pattern: readonly string[],
+): boolean {
+  return (
+    position.length === pattern.length &&
+    pattern.every(
+      (segment, index) => segment === "*" || segment === position[index],
+    )
+  );
+}
+
+function isProductPathField(position: readonly string[]): boolean {
+  return PRODUCT_PATH_FIELDS.some((pattern) =>
+    positionMatches(position, pattern)
+  );
+}
+
+function isDiagnosticPosition(position: readonly string[]): boolean {
+  return DIAGNOSTIC_SUBTREES.some(
+    (pattern) =>
+      pattern.length <= position.length &&
+      pattern.every(
+        (segment, index) => segment === "*" || segment === position[index],
+      ),
+  );
 }
 
 function sanitizePublicValue(
   value: unknown,
   roots: readonly string[],
+  position: readonly string[] = [],
   seen = new WeakSet<object>(),
 ): unknown {
-  if (typeof value === "string") return sanitizePublicString(value, roots);
+  if (typeof value === "string") {
+    if (isDiagnosticPosition(position)) return maskDiagnosticText(value, roots);
+    if (isProductPathField(position)) {
+      return relativizeProductPath(value, roots);
+    }
+    return value;
+  }
   if (value === null || typeof value !== "object") return value;
   if (seen.has(value)) return "<circular>";
   seen.add(value);
   if (Array.isArray(value)) {
     const sanitized = value.map((item) =>
-      sanitizePublicValue(item, roots, seen)
+      sanitizePublicValue(item, roots, [...position, "*"], seen)
     );
     seen.delete(value);
     return sanitized;
@@ -124,7 +206,7 @@ function sanitizePublicValue(
   const sanitized = Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
       key,
-      sanitizePublicValue(item, roots, seen),
+      sanitizePublicValue(item, roots, [...position, key], seen),
     ]),
   );
   seen.delete(value);

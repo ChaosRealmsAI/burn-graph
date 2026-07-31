@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  mkdirSync,
   readdirSync,
   symlinkSync,
   writeFileSync,
@@ -524,5 +525,170 @@ describe("CLI-only authoring from progressive installed Help", () => {
         )
       ).error.code,
     ).toBe("INVALID_GRAPH");
+  });
+
+  // P010 Gate. The known-bad data is user text that *looks* like a private
+  // absolute path: the printer used to mask every string in the envelope, so a
+  // persisted objective of `Read /opt/acme/spec.txt unchanged` was published as
+  // `Read <absolute-path> unchanged`. Both halves are asserted here, because
+  // either one alone is satisfiable by a wrong printer: persisted user text must
+  // read back byte for byte, and product-generated path fields must still be
+  // project-relative.
+  test("returns persisted user text byte-for-byte while product paths stay private", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    await ok(root, ["init"]);
+
+    const objective =
+      "Read /opt/acme/spec.txt unchanged, compare \"/etc/acme/base.conf\", then C:\\acme\\spec.txt.";
+    const instruction =
+      "/opt/acme/spec.txt is the source of truth (see /srv/acme/out.txt).";
+    const mustRead = "/opt/acme/spec.txt";
+    const writablePath = "/srv/acme/out";
+    const graph = {
+      schemaVersion: 2,
+      id: "path-shaped-user-text",
+      title: "Author text that looks like /opt/acme absolute paths",
+      goal: "Prove /opt/acme/spec.txt survives the public envelope unchanged.",
+      revision: 1,
+      maxActive: 1,
+      nodes: [
+        {
+          id: "start",
+          type: "start",
+          title: "Start",
+          prompt: {},
+          next: [{ to: "work" }],
+        },
+        {
+          id: "work",
+          type: "task",
+          title: "Compare /opt/acme/spec.txt",
+          prompt: {
+            objective,
+            instructions: [instruction],
+            mustRead: [mustRead],
+            doneWhen: ["/opt/acme/spec.txt is byte-identical"],
+            writablePaths: [writablePath],
+          },
+          next: [{ to: "end" }],
+        },
+        {
+          id: "end",
+          type: "end",
+          title: "End",
+          prompt: {},
+          next: [],
+        },
+      ],
+    };
+
+    const applied = await ok(
+      root,
+      ["graph", "apply", "--input", "-"],
+      JSON.stringify(graph),
+    );
+    // The product's own path field for the same command stays project-relative.
+    expect(applied.data.path).toBe(
+      ".burn-graph/graphs/path-shaped-user-text.json",
+    );
+
+    const shown = await ok(root, ["graph", "show", "path-shaped-user-text"]);
+    const shownNode = shown.data.nodes.find((node: any) => node.id === "work");
+    expect(shownNode.title).toBe("Compare /opt/acme/spec.txt");
+    expect(shownNode.prompt.objective).toBe(objective);
+    expect(shownNode.prompt.instructions).toEqual([instruction]);
+    expect(shownNode.prompt.mustRead).toEqual([mustRead]);
+    expect(shownNode.prompt.writablePaths).toEqual([writablePath]);
+    expect(shown.data.goal).toBe(graph.goal);
+    expect(shown.data.title).toBe(graph.title);
+
+    const started = await ok(root, ["run", "start", "path-shaped-user-text"]);
+    const assignment = started.data.assignments[0];
+    expect(assignment.node.prompt.objective).toBe(objective);
+    expect(assignment.node.prompt.instructions).toEqual([instruction]);
+    expect(assignment.node.prompt.mustRead).toEqual([mustRead]);
+
+    const summary =
+      "Compared /opt/acme/spec.txt with \"/etc/acme/base.conf\" byte-for-byte.";
+    const evidence = "/opt/acme/spec.txt#sha256=deadbeef";
+    await ok(
+      root,
+      ["done", "--assignment", assignment.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary,
+        evidence: [evidence],
+        output: { checked: "/opt/acme/spec.txt", root: "/srv/acme" },
+      }),
+    );
+
+    const node = await ok(root, [
+      "inspect",
+      "node",
+      "path-shaped-user-text",
+      "work",
+    ]);
+    expect(node.data.spec.prompt.objective).toBe(objective);
+    const attempt = node.data.attempts.at(-1);
+    expect(attempt.result.summary).toBe(summary);
+    expect(attempt.result.evidence).toEqual([evidence]);
+    // A user JSON key called `root` is user content at every depth: only the
+    // product's own `data.root` may ever be relativized.
+    expect(attempt.result.output).toEqual({
+      checked: "/opt/acme/spec.txt",
+      root: "/srv/acme",
+    });
+
+    const events = await ok(root, [
+      "inspect",
+      "events",
+      "path-shaped-user-text",
+      "--after",
+      "0",
+      "--limit",
+      "100",
+    ]);
+    const completed = events.data.find(
+      (event: any) => event.type === "node.completed",
+    );
+    expect(completed.summary).toBe(summary);
+    expect(completed.payload.evidence).toEqual([evidence]);
+
+    // A Viewer record is the one product field that is genuinely absolute before
+    // the printer sees it, so it proves relativization is still applied where
+    // P010 requires it. The recorded PID owns nothing, so nothing is started.
+    const viewers = path.join(root, ".burn-graph", "runtime", "viewers");
+    mkdirSync(viewers, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      path.join(viewers, "default.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        name: "default",
+        pid: 999_999,
+        projectRoot: root,
+        port: 4173,
+        url: "http://127.0.0.1:4173",
+        logFile: path.join(viewers, "default.log"),
+        entryFile: path.join(root, "burn-graph.js"),
+        instanceToken: "known-bad-token",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const status = await ok(root, ["viewer", "status", "default"]);
+    expect(status.data.running).toBe(false);
+    expect(status.data.projectRoot).toBe(".");
+    expect(status.data.logFile).toBe(
+      "./.burn-graph/runtime/viewers/default.log",
+    );
+
+    // The same private root must still be absent from an unrelated failure
+    // envelope, which is where I0014 originally leaked it.
+    const uninitialized = createTestDirectory();
+    roots.push(uninitialized);
+    const notInitialized = await fail(uninitialized, ["inspect", "overview"]);
+    expect(notInitialized.error.code).toBe("NOT_INITIALIZED");
+    expect(notInitialized.error.message).not.toContain(uninitialized);
+    expect(notInitialized.error.message).not.toMatch(/(?:^|[\s"'(=])\/\w/);
   });
 });
