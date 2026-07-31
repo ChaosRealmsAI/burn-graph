@@ -1,0 +1,528 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
+
+import packageMetadata from "../../package.json";
+import {
+  createTestDirectory,
+  removeTestProject,
+} from "../helpers/fixtures.ts";
+
+interface CliResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly envelope: any;
+}
+
+const repositoryRoot = path.resolve(import.meta.dir, "../..");
+const cli = path.join(repositoryRoot, "dist", "burn-graph.js");
+const roots: string[] = [];
+
+async function invoke(
+  root: string,
+  args: readonly string[],
+  stdin?: string,
+): Promise<CliResult> {
+  const child = Bun.spawn(["bun", cli, "--root", root, ...args], {
+    cwd: root,
+    stdin: stdin === undefined ? "ignore" : "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (stdin !== undefined && child.stdin !== undefined) {
+    child.stdin.write(stdin);
+    child.stdin.end();
+  }
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  const serialized = (exitCode === 0 ? stdout : stderr).trim();
+  return {
+    exitCode,
+    stdout,
+    stderr,
+    envelope: JSON.parse(serialized),
+  };
+}
+
+async function ok(
+  root: string,
+  args: readonly string[],
+  stdin?: string,
+): Promise<any> {
+  const result = await invoke(root, args, stdin);
+  expect(result.exitCode, result.stderr).toBe(0);
+  expect(result.envelope).toMatchObject({
+    schemaVersion: 1,
+    ok: true,
+  });
+  expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(256 * 1024);
+  expect(result.stdout).not.toContain(root);
+  expect(result.stdout).not.toContain(repositoryRoot);
+  expect(result.stdout.trim().split("\n")).toHaveLength(1);
+  return result.envelope;
+}
+
+async function fail(
+  root: string,
+  args: readonly string[],
+  stdin?: string,
+): Promise<any> {
+  const result = await invoke(root, args, stdin);
+  expect(result.exitCode).toBe(1);
+  expect(result.envelope).toMatchObject({
+    schemaVersion: 1,
+    ok: false,
+  });
+  expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(256 * 1024);
+  expect(result.stderr).not.toContain(root);
+  expect(result.stderr).not.toContain(repositoryRoot);
+  expect(result.stderr.trim().split("\n")).toHaveLength(1);
+  return result.envelope;
+}
+
+async function firstOutputLine(
+  stream: ReadableStream<Uint8Array>,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  for (;;) {
+    const result = await reader.read();
+    if (result.done) throw new Error("stream ended before one JSONL record");
+    buffered += decoder.decode(result.value, { stream: true });
+    const newline = buffered.indexOf("\n");
+    if (newline >= 0) return buffered.slice(0, newline);
+  }
+}
+
+afterEach(() => {
+  for (const root of roots.splice(0)) removeTestProject(root);
+});
+
+describe("CLI-only authoring from progressive installed Help", () => {
+  test("discovers, authors, and completes a Graph without source docs", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+
+    const rootHelp = await ok(root, ["--help"]);
+    expect(rootHelp.data.commands.map((command: any) => command.name)).toEqual([
+      "init",
+      "template",
+      "run",
+      "next",
+      "current",
+      "done",
+      "inspect",
+      "help",
+    ]);
+    expect(rootHelp.data.commands.map((command: any) => command.name)).not
+      .toContain("graph");
+    expect(rootHelp.data.topics.map((topic: any) => topic.name)).toContain(
+      "authoring",
+    );
+
+    const version = await ok(root, ["--version"]);
+    expect(version.data.version).toBe(packageMetadata.version);
+    const initialized = await ok(root, ["init"]);
+    expect(initialized.data.root).toBe(".");
+
+    const authoring = await ok(root, ["help", "authoring"]);
+    expect(authoring.data.content.schema).toBe("burn-graph graph schema");
+    const schema = await ok(root, ["graph", "schema"]);
+    expect(schema.data.acceptedGraphSpecVersions).toEqual([1, 2]);
+    expect(schema.data.jsonSchema.oneOf).toHaveLength(2);
+
+    for (
+      const kind of ["flat", "decision", "hierarchy", "gate", "wait"]
+    ) {
+      const example = await ok(root, ["graph", "example", kind]);
+      const relativeFile = `example-${kind}.json`;
+      writeFileSync(
+        path.join(root, relativeFile),
+        `${JSON.stringify(example.data.graph, null, 2)}\n`,
+      );
+      const fromFile = await ok(root, [
+        "graph",
+        "validate",
+        "--input",
+        relativeFile,
+      ]);
+      const fromStdin = await ok(
+        root,
+        ["graph", "validate", "--input", "-"],
+        JSON.stringify(example.data.graph),
+      );
+      expect(fromFile.data).toEqual(fromStdin.data);
+    }
+
+    await ok(root, [
+      "graph",
+      "apply",
+      "--input",
+      "example-flat.json",
+    ]);
+    const started = await ok(root, ["run", "start", "example-flat"]);
+    expect(started.data.actorId).toBe("primary");
+    expect(started.data.assignments).toHaveLength(1);
+    const assignment = started.data.assignments[0];
+    const completed = await ok(
+      root,
+      ["done", "--assignment", assignment.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "Completed from installed Help only.",
+        evidence: [],
+      }),
+    );
+    expect(completed.data.state).toBe("completed");
+
+    const follower = Bun.spawn(
+      [
+        "bun",
+        cli,
+        "--root",
+        root,
+        "--pretty",
+        "inspect",
+        "events",
+        "--after",
+        "0",
+        "--limit",
+        "1",
+        "--follow",
+      ],
+      {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    try {
+      const line = await firstOutputLine(follower.stdout);
+      expect(JSON.parse(line)).toMatchObject({
+        schemaVersion: 1,
+        ok: true,
+        command: "inspect.events",
+      });
+      expect(line).not.toContain(root);
+    } finally {
+      follower.kill();
+      await follower.exited;
+    }
+
+    const shown = await ok(root, ["template", "show", "delivery"]);
+    expect(shown.data.exampleInput).toMatchObject({
+      schemaVersion: 1,
+      graphId: "example-delivery",
+      context: {
+        mustRead: [],
+        lockedContracts: [],
+        writablePaths: ["src"],
+        forbidden: ["Do not change unrelated files."],
+        runtime: ["burn-graph inspect overview"],
+      },
+      promptOverrides: [],
+    });
+    const templateFile = "template-delivery.json";
+    writeFileSync(
+      path.join(root, templateFile),
+      `${JSON.stringify(shown.data.exampleInput, null, 2)}\n`,
+    );
+    const fromFile = await ok(root, [
+      "template",
+      "instantiate",
+      "delivery",
+      "--input",
+      templateFile,
+    ]);
+    const fromStdin = await ok(
+      root,
+      ["template", "instantiate", "delivery", "--input", "-"],
+      JSON.stringify(shown.data.exampleInput),
+    );
+    expect(fromFile.data.graphs).toEqual(fromStdin.data.graphs);
+    expect(fromStdin.data.replayed).toBe(true);
+  });
+
+  test("rejects malformed and escaping input before mutation", async () => {
+    const root = createTestDirectory();
+    const outsideRoot = createTestDirectory();
+    roots.push(root, outsideRoot);
+    await ok(root, ["init"]);
+
+    const example = await ok(root, ["graph", "example", "flat"]);
+    const insideFile = path.join(root, "inside.json");
+    const outsideFile = path.join(outsideRoot, "outside.json");
+    writeFileSync(insideFile, `${JSON.stringify(example.data.graph)}\n`);
+    writeFileSync(outsideFile, `${JSON.stringify(example.data.graph)}\n`);
+    symlinkSync(outsideFile, path.join(root, "escape.json"));
+
+    expect(
+      (
+        await fail(root, [
+          "graph",
+          "apply",
+          "--input",
+          insideFile,
+        ])
+      ).error.code,
+    ).toBe("INVALID_INPUT_PATH");
+    expect(
+      (
+        await fail(root, [
+          "graph",
+          "apply",
+          "--input",
+          `../${path.basename(outsideRoot)}/outside.json`,
+        ])
+      ).error.code,
+    ).toBe("INVALID_INPUT_PATH");
+    expect(
+      (
+        await fail(root, [
+          "graph",
+          "apply",
+          "--input",
+          "escape.json",
+        ])
+      ).error.code,
+    ).toBe("INVALID_INPUT_PATH");
+    expect(
+      (
+        await fail(
+          root,
+          ["graph", "apply", "--input", "-"],
+          "{\"schemaVersion\":",
+        )
+      ).error.code,
+    ).toBe("INVALID_JSON");
+    expect(
+      (
+        await fail(
+          root,
+          ["graph", "apply", "--input", "-"],
+          `"${"x".repeat(2 * 1024 * 1024)}"`,
+        )
+      ).error.code,
+    ).toBe("INPUT_TOO_LARGE");
+
+    expect(
+      readdirSync(path.join(root, ".burn-graph", "graphs")),
+    ).toEqual([]);
+
+    const taskCount = 900;
+    const largeGraph = {
+      schemaVersion: 1,
+      id: "known-bad-unbounded-output",
+      title: "Known-bad unbounded output fixture",
+      goal: "Prove the public envelope limit judges red.",
+      revision: 1,
+      maxActive: 1,
+      nodes: [
+        {
+          id: "start",
+          type: "start",
+          title: "Start",
+          prompt: {},
+          next: [{ to: "task-0" }],
+        },
+        ...Array.from({ length: taskCount }, (_, index) => ({
+          id: `task-${index}`,
+          type: "task",
+          title: `Task ${index}`,
+          prompt: {
+            objective:
+              `Return bounded evidence for task ${index}. ${"x".repeat(96)}`,
+          },
+          next: [{ to: index === taskCount - 1 ? "end" : `task-${index + 1}` }],
+        })),
+        {
+          id: "end",
+          type: "end",
+          title: "End",
+          prompt: {},
+          next: [],
+        },
+      ],
+    };
+    const largeValidation = await ok(
+      root,
+      ["graph", "validate", "--input", "-"],
+      JSON.stringify(largeGraph),
+    );
+    expect(largeValidation.data).toMatchObject({
+      valid: true,
+      id: "known-bad-unbounded-output",
+      nodeCount: taskCount + 2,
+    });
+    expect(largeValidation.data.documentBytes).toBeGreaterThan(256 * 1024);
+    expect(largeValidation.data.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(
+      readdirSync(path.join(root, ".burn-graph", "graphs")),
+    ).toEqual([]);
+
+    await ok(
+      root,
+      ["graph", "apply", "--input", "-"],
+      JSON.stringify(largeGraph),
+    );
+    expect(
+      (
+        await fail(root, [
+          "graph",
+          "show",
+          "known-bad-unbounded-output",
+        ])
+      ).error.code,
+    ).toBe("OUTPUT_LIMIT_EXCEEDED");
+    const parser = await fail(root, ["run", "start"]);
+    expect(parser.error.code).toBe("INVALID_ARGUMENTS");
+    expect(parser.recoveryActions[0].command).toBe(
+      "burn-graph run start --help",
+    );
+  });
+
+  test("keeps oversized mutation results truthful and recoverable", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    await ok(root, ["init"]);
+
+    const widePrompt = "x".repeat(30_000);
+    const graph = {
+      schemaVersion: 1,
+      id: "bounded-mutation-output",
+      title: "Bounded mutation output",
+      goal: "Keep complete Assignment packets inside the public envelope.",
+      revision: 1,
+      maxActive: 8,
+      nodes: [
+        {
+          id: "start",
+          type: "start",
+          title: "Start",
+          prompt: {},
+          next: Array.from({ length: 8 }, (_, index) => ({
+            to: `task-${index}`,
+          })),
+        },
+        ...Array.from({ length: 8 }, (_, index) => ({
+          id: `task-${index}`,
+          type: "task",
+          title: `Task ${index}`,
+          prompt: { objective: widePrompt },
+          next: [{ to: "join" }],
+        })),
+        {
+          id: "join",
+          type: "join",
+          title: "Join",
+          prompt: {},
+          next: [{ to: "end" }],
+        },
+        {
+          id: "end",
+          type: "end",
+          title: "End",
+          prompt: {},
+          next: [],
+        },
+      ],
+    };
+    await ok(
+      root,
+      ["graph", "apply", "--input", "-"],
+      JSON.stringify(graph),
+    );
+    const started = await ok(root, [
+      "run",
+      "start",
+      "bounded-mutation-output",
+    ]);
+    expect(started.data.assignments.length).toBeGreaterThan(0);
+    expect(started.data.assignments.length).toBeLessThan(8);
+    expect(started.data.assignmentOutput).toMatchObject({
+      maximumBytes: 128 * 1024,
+      limited: true,
+    });
+    expect(started.data.assignmentOutput.usedBytes).toBeLessThanOrEqual(
+      128 * 1024,
+    );
+    const doneBefore = started.data.runs.find(
+      (entry: any) => entry.graphId === "bounded-mutation-output",
+    ).counts.done;
+
+    const current = await ok(root, ["current"]);
+    expect(current.data.assignments.map(
+      (entry: any) => entry.assignmentId,
+    )).toEqual(started.data.assignments.map(
+      (entry: any) => entry.assignmentId,
+    ));
+
+    const first = started.data.assignments[0];
+    const completion = await ok(
+      root,
+      ["done", "--assignment", first.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "Large node-specific output committed.",
+        output: { value: "z".repeat(400_000) },
+        evidence: [],
+      }),
+    );
+    expect(completion.data).toMatchObject({
+      boundedReceipt: true,
+      responseOmitted: true,
+      actorId: "primary",
+      state: "assigned",
+    });
+    expect(completion.data.originalBytes).toBeGreaterThan(256 * 1024);
+    expect(completion.data.committedChangeCount).toBeGreaterThan(0);
+    expect(completion.data.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(completion.nextActions).toContainEqual(
+      expect.objectContaining({
+        command: "burn-graph current --actor primary",
+      }),
+    );
+
+    const overview = await ok(root, [
+      "inspect",
+      "overview",
+      "--limit",
+      "10",
+    ]);
+    const summary = overview.data.runs.find(
+      (entry: any) => entry.graphId === "bounded-mutation-output",
+    );
+    expect(summary.counts.done).toBe(doneBefore + 1);
+    expect((await ok(root, ["current"])).data.assignments.length)
+      .toBeGreaterThan(0);
+
+    const oversizedPromptGraph = {
+      ...graph,
+      id: "oversized-prompt-contract",
+      nodes: graph.nodes.map((node) =>
+        node.id === "task-0"
+          ? {
+              ...node,
+              prompt: { objective: "x".repeat(33_000) },
+            }
+          : node
+      ),
+    };
+    expect(
+      (
+        await fail(
+          root,
+          ["graph", "validate", "--input", "-"],
+          JSON.stringify(oversizedPromptGraph),
+        )
+      ).error.code,
+    ).toBe("INVALID_GRAPH");
+  });
+});

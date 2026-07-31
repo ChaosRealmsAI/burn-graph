@@ -30,6 +30,8 @@ const templateCatalogFile = path.join(
   "assets",
   "catalog.json",
 );
+const usageFile = path.join(repositoryRoot, "USAGE.md");
+const docsDirectory = path.join(repositoryRoot, "docs");
 const sourcePackage = JSON.parse(
   readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
 ) as SourcePackage;
@@ -42,6 +44,34 @@ if (!existsSync(cliFile) || !existsSync(path.join(viewerDirectory, "index.html")
 }
 if (!existsSync(templateCatalogFile)) {
   throw new Error("Package template catalog is missing");
+}
+if (!existsSync(usageFile) || !existsSync(docsDirectory)) {
+  throw new Error("Installed Usage or public docs are missing");
+}
+
+function writeCliAsset(
+  root: string,
+  relativeFile: string,
+  args: readonly string[],
+): void {
+  const result = Bun.spawnSync(["bun", cliFile, ...args], {
+    cwd: repositoryRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Cannot generate ${relativeFile}: ${result.stderr.toString().trim()}`,
+    );
+  }
+  const output = result.stdout.toString();
+  const envelope = JSON.parse(output) as { readonly ok?: unknown };
+  if (envelope.ok !== true) {
+    throw new Error(`CLI returned a failed asset for ${relativeFile}`);
+  }
+  const target = path.join(root, relativeFile);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, output);
 }
 
 const temporaryRoot = path.join(repositoryRoot, ".tmp", "package");
@@ -85,6 +115,27 @@ try {
   copyFileSync(
     path.join(repositoryRoot, "README.md"),
     path.join(stagingRoot, "README.md"),
+  );
+  copyFileSync(usageFile, path.join(stagingRoot, "USAGE.md"));
+  cpSync(docsDirectory, path.join(stagingRoot, "docs"), {
+    recursive: true,
+  });
+  writeCliAsset(stagingRoot, "help/root.json", ["--help"]);
+  writeCliAsset(stagingRoot, "help/authoring.json", ["help", "authoring"]);
+  writeCliAsset(stagingRoot, "schema/graph-spec.json", ["graph", "schema"]);
+  for (
+    const kind of ["flat", "decision", "hierarchy", "gate", "wait"]
+  ) {
+    writeCliAsset(
+      stagingRoot,
+      `examples/${kind}.json`,
+      ["graph", "example", kind],
+    );
+  }
+  writeCliAsset(
+    stagingRoot,
+    "examples/template-delivery.json",
+    ["template", "show", "delivery"],
   );
   mkdirSync(releaseRoot, { recursive: true });
 

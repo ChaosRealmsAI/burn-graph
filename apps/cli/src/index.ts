@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import {
@@ -8,8 +8,11 @@ import {
   BurnGraphService,
   discoverProjectRoot,
   initializeProject,
+  MAX_COMPLETION_CONTEXT_BYTES,
   validateCheckSpec,
   validateGraphSpec,
+  type CheckSpec,
+  type GraphSpec,
   type GraphStatus,
   type NodeStatus,
   type RunPriority,
@@ -31,6 +34,19 @@ import {
 import { Command, Option } from "commander";
 import { ZodError } from "zod";
 
+import packageMetadata from "../../../package.json";
+import {
+  GRAPH_EXAMPLE_KINDS,
+  graphExample,
+  graphSchemaDocument,
+} from "./authoring.ts";
+import {
+  MAX_JSON_INPUT_BYTES,
+  printEnvelope,
+  readConfinedJsonInput,
+  type Envelope,
+  type NextAction,
+} from "./public-io.ts";
 import { startViewerServer } from "./server.ts";
 import {
   startViewerInstance,
@@ -38,7 +54,17 @@ import {
   viewerInstanceStatus,
 } from "./viewer-runtime.ts";
 
-const VERSION = "0.1.0-rc.1";
+const VERSION = packageMetadata.version;
+const ROOT_HELP_COMMANDS = [
+  "init",
+  "template",
+  "run",
+  "next",
+  "current",
+  "done",
+  "inspect",
+  "help",
+] as const;
 const GRAPH_STATUSES: readonly GraphStatus[] = [
   "draft",
   "running",
@@ -67,28 +93,6 @@ interface GlobalOptions {
   readonly version?: boolean;
 }
 
-interface NextAction {
-  readonly id: string;
-  readonly command: string;
-  readonly description: string;
-}
-
-interface Envelope {
-  readonly schemaVersion: 1;
-  readonly ok: boolean;
-  readonly command: string;
-  readonly data?: unknown;
-  readonly changes?: readonly RuntimeChange[];
-  readonly nextActions?: readonly NextAction[];
-  readonly error?: {
-    readonly code: string;
-    readonly message: string;
-    readonly retryable: boolean;
-    readonly details: Readonly<Record<string, unknown>>;
-  };
-  readonly recoveryActions?: readonly NextAction[];
-}
-
 interface HelpDetail {
   readonly mutates: boolean;
   readonly input?: unknown;
@@ -99,7 +103,7 @@ interface HelpDetail {
 
 const program = new Command("burn-graph")
   .description("Guarded local prompt-graph control plane for AI callers")
-  .option("--root <path>", "project root or descendant", process.cwd())
+  .option("--root <path>", "project root or descendant")
   .option("--pretty", "pretty-print JSON output")
   .option("-V, --version", "return version as JSON")
   .addHelpCommand(false);
@@ -130,10 +134,15 @@ function prettyOutput(): boolean {
   return globalOptions().pretty === true || process.argv.includes("--pretty");
 }
 
-function print(envelope: Envelope): void {
-  const output = JSON.stringify(envelope, null, prettyOutput() ? 2 : undefined);
-  const stream = envelope.ok ? process.stdout : process.stderr;
-  stream.write(`${output}\n`);
+function print(
+  envelope: Envelope,
+  options: { readonly forceCompact?: boolean } = {},
+): void {
+  const rootInput = globalOptions().root;
+  printEnvelope(envelope, {
+    pretty: options.forceCompact === true ? false : prettyOutput(),
+    ...(rootInput === undefined ? {} : { rootInput }),
+  });
 }
 
 function success(
@@ -178,25 +187,23 @@ async function withServiceAsync<T>(
   }
 }
 
+function resolveActor(
+  service: BurnGraphService,
+  requested?: string,
+): string {
+  if (requested !== undefined) return requested;
+  const configured = (service.config as unknown as { defaultActor?: unknown })
+    .defaultActor;
+  return typeof configured === "string" && configured.length > 0
+    ? configured
+    : "primary";
+}
+
 async function readJsonInput(input: string): Promise<unknown> {
-  const text =
-    input === "-"
-      ? await Bun.stdin.text()
-      : readFileSync(path.resolve(input), "utf8");
-  if (Buffer.byteLength(text) > 2 * 1024 * 1024) {
-    throw new BurnGraphError(
-      "INPUT_TOO_LARGE",
-      "JSON input exceeds the 2 MiB limit",
-    );
-  }
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new BurnGraphError(
-      "INVALID_JSON",
-      error instanceof Error ? error.message : "Invalid JSON",
-    );
-  }
+  return readConfinedJsonInput(
+    input,
+    globalOptions().root ?? process.cwd(),
+  );
 }
 
 function boundedInteger(maximum: number) {
@@ -299,6 +306,55 @@ function mutationChange(result: {
   return [{ revision: result.revision, event: result.event }];
 }
 
+function documentDigest(value: unknown): {
+  readonly documentBytes: number;
+  readonly sha256: string;
+} {
+  const document = JSON.stringify(value);
+  return {
+    documentBytes: Buffer.byteLength(document),
+    sha256: createHash("sha256").update(document).digest("hex"),
+  };
+}
+
+function graphReceipt(
+  spec: GraphSpec,
+  registered = true,
+): Readonly<Record<string, unknown>> {
+  return {
+    valid: true,
+    schemaVersion: spec.schemaVersion,
+    id: spec.id,
+    title: spec.title,
+    revision: spec.revision,
+    maxActive: spec.maxActive,
+    nodeCount: spec.nodes.length,
+    ...documentDigest(spec),
+    ...(registered
+      ? { path: `.burn-graph/graphs/${spec.id}.json` }
+      : {}),
+  };
+}
+
+function checkReceipt(
+  spec: CheckSpec,
+  registered = true,
+): Readonly<Record<string, unknown>> {
+  return {
+    valid: true,
+    schemaVersion: spec.schemaVersion,
+    id: spec.id,
+    title: spec.title,
+    revision: spec.revision,
+    argvCount: spec.argv.length,
+    timeoutMs: spec.timeoutMs,
+    ...documentDigest(spec),
+    ...(registered
+      ? { path: `.burn-graph/checks/${spec.id}.json` }
+      : {}),
+  };
+}
+
 function parseNodeStatuses(value?: string): readonly NodeStatus[] | null {
   if (!value) return null;
   const statuses = value
@@ -326,12 +382,12 @@ program
   .action((projectPath?: string) => {
     const root = path.resolve(projectPath ?? globalOptions().root ?? process.cwd());
     const config = initializeProject(root, new Date().toISOString());
-    success("init", { root, config }, {
+    success("init", { root: ".", config }, {
       nextActions: [
         {
-          id: "apply-graph",
-          command: "burn-graph graph apply --input graph.json",
-          description: "Validate and register the first GraphSpec.",
+          id: "templates",
+          command: "burn-graph template list",
+          description: "Choose a packaged workflow or open Help authoring.",
         },
       ],
     });
@@ -340,13 +396,51 @@ program
 const graph = group("graph", "author and inspect GraphSpec JSON");
 
 graph
+  .command("schema")
+  .description("return the complete versioned GraphSpec authoring schema")
+  .action(() => {
+    success("graph.schema", graphSchemaDocument(), {
+      nextActions: [
+        {
+          id: "example",
+          command: "burn-graph graph example decision",
+          description: "Inspect one complete valid GraphSpec.",
+        },
+      ],
+    });
+  });
+
+graph
+  .command("example")
+  .description("return one complete valid GraphSpec example")
+  .argument("<kind>", `one of ${GRAPH_EXAMPLE_KINDS.join("|")}`)
+  .action((kind: string) => {
+    success("graph.example", graphExample(kind), {
+      nextActions: [
+        {
+          id: "validate-file",
+          command: "burn-graph graph validate --input graph.json",
+          description:
+            "Save data.graph inside the project and validate that relative file.",
+        },
+        {
+          id: "validate-stdin",
+          command: "burn-graph graph validate --input -",
+          description: "Send data.graph only through stdin.",
+        },
+      ],
+    });
+  });
+
+graph
   .command("validate")
   .description("validate a GraphSpec without writing it")
   .requiredOption("--input <file>", "JSON file or - for stdin")
   .action(async (options: { input: string }) => {
+    const spec = validateGraphSpec(await readJsonInput(options.input)).spec;
     success(
       "graph.validate",
-      validateGraphSpec(await readJsonInput(options.input)).spec,
+      graphReceipt(spec, false),
       {
         nextActions: [
           {
@@ -366,11 +460,11 @@ graph
   .action(async (options: { input: string }) => {
     const input = await readJsonInput(options.input);
     const spec = withService((service) => service.applyGraph(input));
-    success("graph.apply", spec, {
+    success("graph.apply", graphReceipt(spec), {
       nextActions: [
         {
           id: "start-run",
-          command: `burn-graph run start ${spec.id} --actor primary`,
+          command: `burn-graph run start ${spec.id}`,
           description: "Start the Graph and receive its first Assignments.",
         },
       ],
@@ -402,11 +496,11 @@ graph
     const spec = withService((service) =>
       service.cloneGraph(source, target, options.title),
     );
-    success("graph.clone", spec, {
+    success("graph.clone", graphReceipt(spec), {
       nextActions: [
         {
           id: "start-run",
-          command: `burn-graph run start ${spec.id} --actor primary`,
+          command: `burn-graph run start ${spec.id}`,
           description: "Start the cloned Graph.",
         },
       ],
@@ -471,8 +565,7 @@ template
     success("template.instantiate", receipt, {
       nextActions: receipt.graphs.map((graphReceipt) => ({
         id: `start:${graphReceipt.graphId}`,
-        command:
-          `burn-graph run start ${graphReceipt.graphId} --actor primary`,
+        command: `burn-graph run start ${graphReceipt.graphId}`,
         description: "Start the generated Graph and receive its first prompt.",
       })),
     });
@@ -485,9 +578,10 @@ check
   .description("validate a CheckSpec without writing it")
   .requiredOption("--input <file>", "JSON file or - for stdin")
   .action(async (options: { input: string }) => {
+    const spec = validateCheckSpec(await readJsonInput(options.input));
     success(
       "check.validate",
-      validateCheckSpec(await readJsonInput(options.input)),
+      checkReceipt(spec, false),
       {
         nextActions: [{
           id: "apply-check",
@@ -507,7 +601,7 @@ check
     const spec = withService((service) =>
       service.applyCheck(input),
     );
-    success("check.apply", spec, {
+    success("check.apply", checkReceipt(spec), {
       nextActions: [{
         id: "apply-graph",
         command: "burn-graph graph apply --input graph.json",
@@ -547,20 +641,21 @@ run
   .command("start")
   .description("start a Graph and immediately return prompt Assignments")
   .argument("<graph>", "Graph ID")
-  .requiredOption("--actor <id>", "stable Actor ID")
+  .option("--actor <id>", "stable Actor ID; defaults to project Actor")
   .option("--run-id <id>", "stable explicit Run ID")
   .action(
     async (
       graphId: string,
-      options: { actor: string; runId?: string },
+      options: { actor?: string; runId?: string },
     ) => {
-      const result = await withServiceAsync((service) =>
-        new SystemNodeDriver(service).start(
+      const result = await withServiceAsync((service) => {
+        const actor = resolveActor(service, options.actor);
+        return new SystemNodeDriver(service).start(
           graphId,
-          options.actor,
+          actor,
           options.runId,
-        ),
-      );
+        );
+      });
       scheduleSuccess("run.start", result);
     },
   );
@@ -580,7 +675,7 @@ run
       nextActions: [
         {
           id: "resume",
-          command: `burn-graph run resume ${reference} --actor primary --idempotency-key <new-key>`,
+          command: `burn-graph run resume ${reference} --idempotency-key <new-key>`,
           description: "Resume scheduling when ready.",
         },
       ],
@@ -591,20 +686,21 @@ run
   .command("resume")
   .description("resume a Run and immediately return prompt Assignments")
   .argument("<run-or-graph>")
-  .requiredOption("--actor <id>", "stable Actor ID")
+  .option("--actor <id>", "stable Actor ID; defaults to project Actor")
   .requiredOption("--idempotency-key <key>", "stable retry key")
   .action(
     async (
       reference: string,
-      options: { actor: string; idempotencyKey: string },
+      options: { actor?: string; idempotencyKey: string },
     ) => {
-    const result = await withServiceAsync((service) =>
-      new SystemNodeDriver(service).resume(
+    const result = await withServiceAsync((service) => {
+      const actor = resolveActor(service, options.actor);
+      return new SystemNodeDriver(service).resume(
           reference,
-          options.actor,
+          actor,
           options.idempotencyKey,
-      ),
-    );
+      );
+    });
     scheduleSuccess("run.resume", result);
     },
   );
@@ -659,7 +755,7 @@ run
         changes: result.changes ?? mutationChange(result),
         nextActions: [{
           id: "next",
-          command: "burn-graph next --actor primary",
+          command: "burn-graph next",
           description: "Schedule eligible roots under the updated priority.",
         }],
       },
@@ -669,26 +765,29 @@ run
 program
   .command("next")
   .description("resume and automatically fill one Actor's Assignment slots")
-  .requiredOption("--actor <id>", "stable Actor ID")
+  .option("--actor <id>", "stable Actor ID; defaults to project Actor")
   .option("--graph <run-or-graph>", "prefer and converge one Run tree")
-  .action(async (options: { actor: string; graph?: string }) => {
-    scheduleSuccess(
-      "next",
-      await withServiceAsync((service) =>
-        new SystemNodeDriver(service).next(options.actor, options.graph),
-      ),
-    );
+  .action(async (options: { actor?: string; graph?: string }) => {
+    const result = await withServiceAsync((service) => {
+      const actor = resolveActor(service, options.actor);
+      return new SystemNodeDriver(service).next(actor, options.graph);
+    });
+    scheduleSuccess("next", result);
   });
 
 program
   .command("current")
   .description("return one Actor's current complete Assignment packets")
-  .requiredOption("--actor <id>", "stable Actor ID")
-  .action((options: { actor: string }) => {
-    const data = withService((service) => ({
-      work: service.actorWork(options.actor),
-      assignments: service.assignmentsForActor(options.actor),
-    }));
+  .option("--actor <id>", "stable Actor ID; defaults to project Actor")
+  .action((options: { actor?: string }) => {
+    const data = withService((service) => {
+      const actor = resolveActor(service, options.actor);
+      return {
+        actor,
+        work: service.actorWork(actor),
+        assignments: service.assignmentsForActor(actor),
+      };
+    });
     success("current", data, {
       nextActions:
         data.assignments.length > 0
@@ -700,7 +799,7 @@ program
           : [
               {
                 id: "next",
-                command: `burn-graph next --actor ${options.actor}`,
+                command: `burn-graph next --actor ${data.actor}`,
                 description: "Request the next available Assignments.",
               },
             ],
@@ -872,7 +971,7 @@ signal
         changes,
         nextActions: [{
           id: "next",
-          command: "burn-graph next --actor primary",
+          command: "burn-graph next",
           description: "Claim any AI successor through the normal scheduler.",
         }],
       });
@@ -1027,7 +1126,10 @@ inspect
       nextActions: [
         {
           id: "next",
-          command: `burn-graph next --actor ${options.actor ?? "primary"}`,
+          command:
+            options.actor === undefined
+              ? "burn-graph next"
+              : `burn-graph next --actor ${options.actor}`,
           description: "Let the Runtime claim eligible nodes automatically.",
         },
       ],
@@ -1195,14 +1297,12 @@ inspect
         try {
           const batch = service.listEvents(reference, cursor, options.limit);
           for (const event of batch) {
-            process.stdout.write(
-              `${JSON.stringify({
-                schemaVersion: 1,
-                ok: true,
-                command: "inspect.events",
-                data: event,
-              })}\n`,
-            );
+            print({
+              schemaVersion: 1,
+              ok: true,
+              command: "inspect.events",
+              data: event,
+            }, { forceCompact: true });
             cursor = event.sequence;
           }
         } finally {
@@ -1515,7 +1615,7 @@ program
       const resourceLocks = service.listResourceLocks().length;
       return {
         projectId: snapshot.projectId,
-        root: service.root,
+        root: ".",
         config: service.config,
         graphCount: snapshot.graphs.length,
         runCount: snapshot.runs.length,
@@ -1551,6 +1651,8 @@ program
 const helpDetails = new Map<string, HelpDetail>([
   ["init", { mutates: true, next: ["graph.apply"] }],
   ["graph", { mutates: false }],
+  ["graph.schema", { mutates: false, next: ["graph.example"] }],
+  ["graph.example", { mutates: false, next: ["graph.validate"] }],
   ["graph.validate", { mutates: false, input: "GraphSpec JSON" }],
   ["graph.apply", { mutates: true, input: "GraphSpec JSON", next: ["run.start"] }],
   ["graph.list", { mutates: false }],
@@ -1661,7 +1763,8 @@ const helpDetails = new Map<string, HelpDetail>([
     {
       mutates: true,
       input: {
-        summary: "non-empty string",
+        summary:
+          `non-empty string; summary + evidence + route <= ${MAX_COMPLETION_CONTEXT_BYTES} UTF-8 bytes`,
         output: "node-specific JSON value",
         evidence: "string[]",
         route: "declared Decision route only",
@@ -1737,11 +1840,37 @@ const helpDetails = new Map<string, HelpDetail>([
 ]);
 
 const helpTopics: Readonly<Record<string, unknown>> = {
+  authoring: {
+    title: "Author a complete project-local Graph without source docs",
+    sequence: [
+      "burn-graph graph example decision",
+      "save data.graph as graph.json inside the initialized project",
+      "burn-graph graph validate --input graph.json",
+      "burn-graph graph apply --input graph.json",
+      "burn-graph run start <graph>",
+      "execute each returned AssignmentPacket prompt",
+      "burn-graph done --assignment <id> --input -",
+    ],
+    schema: "burn-graph graph schema",
+    examples: GRAPH_EXAMPLE_KINDS.map(
+      (kind) => `burn-graph graph example ${kind}`,
+    ),
+    structuredInput: {
+      file: "A project-relative file confined after realpath and symlink resolution.",
+      stdin: "Use --input - and send the JSON value only.",
+      maximumBytes: MAX_JSON_INPUT_BYTES,
+    },
+    advanced: {
+      graph: "burn-graph graph --help",
+      check: "burn-graph check --help",
+      templates: "burn-graph help templates",
+    },
+  },
   "ai-loop": {
     title: "Guarded AI execution loop",
     sequence: [
       "burn-graph graph apply --input graph.json",
-      "burn-graph run start <graph> --actor <actor>",
+      "burn-graph run start <graph>",
       "execute every returned AssignmentPacket prompt",
       "burn-graph done --assignment <id> --input -",
       "repeat returned AssignmentPacket prompts until state is completed",
@@ -1774,7 +1903,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     ],
     commands: ["graph validate", "graph apply", "graph show"],
     executionAvailability: {
-      "0.1.0-rc.1":
+      [VERSION]:
         "Subgraph, registered Gate, and durable Wait execute through the bounded System Node Driver.",
     },
   },
@@ -1782,7 +1911,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     title: "Idempotent Run-tree lifecycle",
     commands: [
       "run pause <run> --idempotency-key <key>",
-      "run resume <run> --actor <actor> --idempotency-key <new-key>",
+      "run resume <run> --idempotency-key <new-key>",
       "run cancel <run> --idempotency-key <new-key>",
       "run priority <root-run> --value low|normal|high --idempotency-key <new-key>",
     ],
@@ -1822,7 +1951,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "burn-graph template list",
       "burn-graph template show <template>",
       "burn-graph template instantiate <template> --input template-input.json",
-      "burn-graph run start <generated-graph> --actor <actor>",
+      "burn-graph run start <generated-graph>",
     ],
     invariants: [
       "All generated GraphSpecs and Check references validate before write.",
@@ -1855,6 +1984,18 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "recover fail",
       "recover reconcile",
     ],
+  },
+  diagnosis: {
+    title: "Advanced bounded diagnosis",
+    commands: [
+      "burn-graph doctor",
+      "burn-graph viewer --help",
+      "burn-graph inspect events --help",
+      "burn-graph inspect executions --help",
+      "burn-graph signal --help",
+    ],
+    rule:
+      "Start with inspect; use doctor or recovery only when the normal loop returns no actionable Assignment.",
   },
   errors: {
     title: "Stable error envelope",
@@ -1904,6 +2045,21 @@ function commandPath(command: Command): readonly string[] {
   return parts;
 }
 
+function rootHelpCommands(): readonly Command[] {
+  return ROOT_HELP_COMMANDS.map((name) => {
+    const command = program.commands.find(
+      (candidate) => candidate.name() === name,
+    );
+    if (!command) {
+      throw new BurnGraphError(
+        "HELP_CONTRACT_INVALID",
+        `Root Help command ${name} is not registered`,
+      );
+    }
+    return command;
+  });
+}
+
 function helpPayload(
   parts: readonly string[],
   preferTopic = false,
@@ -1934,10 +2090,14 @@ function helpPayload(
   const pathParts = commandPath(command);
   const key = pathParts.join(".");
   const detail = helpDetails.get(key) ?? { mutates: false };
-  const visibleCommands = command.commands.filter(
-    (candidate) =>
-      !candidate.name().startsWith("__") && candidate.name() !== "help",
-  );
+  const visibleCommands =
+    pathParts.length === 0
+      ? rootHelpCommands()
+      : command.commands.filter(
+          (candidate) =>
+            !candidate.name().startsWith("__") &&
+            candidate.name() !== "help",
+        );
   return {
     topic: key || "root",
     kind: visibleCommands.length > 0 ? "area" : "command",
@@ -1988,19 +2148,17 @@ function helpPayload(
       ? {
           quickstart: [
             "burn-graph init",
-            "burn-graph graph apply --input graph.json",
-            "burn-graph run start <graph> --actor primary",
+            "burn-graph template list",
+            "burn-graph template show vertical-slice",
+            "burn-graph help authoring",
+            "burn-graph run start <graph>",
             "burn-graph done --assignment <id> --input -",
           ],
-          groups: {
-            author: ["init", "graph", "template"],
-            execute: ["check", "run", "next", "current", "focus", "done", "signal"],
-            observe: ["inspect", "render", "viewer"],
-            recover: ["recover", "doctor"],
-            learn: Object.keys(helpTopics).map(
-              (topic) => `burn-graph help ${topic}`,
-            ),
-          },
+          dailyLoop: ROOT_HELP_COMMANDS,
+          topics: Object.keys(helpTopics).map((topic) => ({
+            name: topic,
+            command: `burn-graph help ${topic}`,
+          })),
         }
       : {}),
   };
@@ -2066,6 +2224,38 @@ function hasCommandOperand(args: readonly string[]): boolean {
 }
 
 function recoveryActions(error: BurnGraphError): readonly NextAction[] {
+  if (
+    error.code === "INVALID_JSON" ||
+    error.code === "INVALID_INPUT" ||
+    error.code === "INVALID_GRAPH"
+  ) {
+    return [
+      {
+        id: "schema",
+        command: "burn-graph graph schema",
+        description: "Inspect the complete versioned GraphSpec schema.",
+      },
+      {
+        id: "example",
+        command: "burn-graph graph example decision",
+        description: "Compare with one complete valid document.",
+      },
+    ];
+  }
+  if (
+    error.code === "INVALID_INPUT_PATH" ||
+    error.code === "INPUT_NOT_FOUND" ||
+    error.code === "INPUT_NOT_READABLE"
+  ) {
+    return [
+      {
+        id: "stdin",
+        command: "burn-graph help authoring",
+        description:
+          "Use a confined project-relative file or send JSON through --input -.",
+      },
+    ];
+  }
   if (error.code === "LEASE_EXPIRED") {
     return [
       {

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import packageMetadata from "../../package.json";
+import { confinedInputArgs } from "../helpers/cli.ts";
 import {
   createTestDirectory,
   prompt,
@@ -14,7 +16,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-rc.1.tgz",
+  `burn-graph-${packageMetadata.version}.tgz`,
 );
 const roots: string[] = [];
 const preserveEvidenceFixture =
@@ -26,7 +28,13 @@ async function invokeCli(
   args: readonly string[],
   stdin?: string,
 ): Promise<any> {
-  const child = Bun.spawn(["bun", executable, "--root", root, ...args], {
+  const child = Bun.spawn([
+    "bun",
+    executable,
+    "--root",
+    root,
+    ...confinedInputArgs(root, args),
+  ], {
     cwd: root,
     stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",

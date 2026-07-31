@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
+import packageMetadata from "../../package.json";
 import {
   createTestDirectory,
   loopGraph,
@@ -77,9 +78,10 @@ async function fail(
 }
 
 function writeGraph(root: string, name: string, graph: unknown): string {
-  const file = path.join(root, `${name}.json`);
+  const relativeFile = `${name}.json`;
+  const file = path.join(root, relativeFile);
   writeFileSync(file, `${JSON.stringify(graph, null, 2)}\n`);
-  return file;
+  return relativeFile;
 }
 
 function assignment(envelope: any, graphId: string, nodeId: string): any {
@@ -102,14 +104,17 @@ describe("converged public CLI", () => {
 
     const rootHelp = await ok(root, ["--help"]);
     expect(rootHelp.command).toBe("help");
-    expect(rootHelp.data.groups.execute).toEqual([
-      "check",
+    expect(
+      rootHelp.data.commands.map((command: any) => command.name),
+    ).toEqual([
+      "init",
+      "template",
       "run",
       "next",
       "current",
-      "focus",
       "done",
-      "signal",
+      "inspect",
+      "help",
     ]);
     expect(
       rootHelp.data.commands.map((command: any) => command.name),
@@ -164,7 +169,7 @@ describe("converged public CLI", () => {
       "burn-graph done --help",
     );
     const version = await ok(root, ["--version"]);
-    expect(version.data.version).toBe("0.1.0-rc.1");
+    expect(version.data.version).toBe(packageMetadata.version);
 
     for (const removed of [
       ["work", "--help"],

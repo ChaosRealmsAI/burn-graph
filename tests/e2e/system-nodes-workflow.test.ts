@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { CheckSpec } from "@burn-graph/core";
 
+import { confinedInputArgs } from "../helpers/cli.ts";
 import {
   createTestDirectory,
   removeTestProject,
@@ -22,7 +23,13 @@ async function invoke(
   args: readonly string[],
   stdin?: string,
 ): Promise<any> {
-  const child = Bun.spawn(["bun", cli, "--root", root, ...args], {
+  const child = Bun.spawn([
+    "bun",
+    cli,
+    "--root",
+    root,
+    ...confinedInputArgs(root, args),
+  ], {
     cwd: root,
     stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",

@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import { confinedInputArgs } from "../helpers/cli.ts";
 import {
   convergenceGraph,
   createTestDirectory,
@@ -33,7 +34,13 @@ async function invoke(
   args: readonly string[],
   env: Readonly<Record<string, string>> = {},
 ): Promise<CliResult> {
-  const child = Bun.spawn(["bun", cli, "--root", root, ...args], {
+  const child = Bun.spawn([
+    "bun",
+    cli,
+    "--root",
+    root,
+    ...confinedInputArgs(root, args),
+  ], {
     cwd: root,
     env: { ...process.env, ...env },
     stdin: "ignore",

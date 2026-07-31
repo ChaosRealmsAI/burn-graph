@@ -8,6 +8,7 @@ import {
   GraphStatusSchema,
   IdempotencyKeySchema,
   IdentifierSchema,
+  MAX_ACTOR_ASSIGNMENT_BYTES,
   NodeStatusSchema,
   RunPrioritySchema,
   type ActorWork,
@@ -77,7 +78,13 @@ import {
 
 const MAX_SCHEDULE_READY_PREVIEW = 32;
 const MAX_SCHEDULE_RUN_SUMMARIES = 8;
+const MAX_ASSIGNMENT_OUTPUT_BLOCK_SAMPLE = 8;
+const MAX_ASSIGNMENT_OUTPUT_BLOCK_PROBES = 32;
 const MAX_TREE_PROJECTION_RUNS = 10_000;
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
 
 interface AssignmentIdentity {
   readonly assignmentId: string;
@@ -993,7 +1000,7 @@ export class BurnGraphServiceBase {
     );
     const expiresAt = leaseTime(now, duration);
 
-    const sequence = this.database.immediate(() => {
+    const claimed = this.database.immediate(() => {
       const run = this.runRow(runId);
       if (stringValue(run, "status") !== "running") {
         throw new BurnGraphError(
@@ -1176,7 +1183,7 @@ export class BurnGraphServiceBase {
         )
         .run(at, stringValue(run, "root_run_id"));
       const revision = this.bumpRun(runId, at, undefined, nodeId);
-      return this.appendEvent({
+      const sequence = this.appendEvent({
         runId,
         graphId: stringValue(run, "graph_id"),
         nodeId,
@@ -1193,13 +1200,30 @@ export class BurnGraphServiceBase {
         },
         at,
       });
+      const packet = this.assignmentPacket(runId, nodeId, actorId);
+      const actorAssignments = this.assignmentsForActor(actorId);
+      const requestedBytes = serializedBytes(actorAssignments);
+      if (requestedBytes > MAX_ACTOR_ASSIGNMENT_BYTES) {
+        throw new BurnGraphError(
+          "ACTOR_ASSIGNMENT_OUTPUT_LIMIT",
+          `Claiming ${runId}/${nodeId} would exceed the Actor Assignment output limit`,
+          true,
+          {
+            runId,
+            nodeId,
+            maximumBytes: MAX_ACTOR_ASSIGNMENT_BYTES,
+            requestedBytes,
+            currentAssignmentCount: actorAssignments.length - 1,
+          },
+        );
+      }
+      return { sequence, packet };
     });
 
-    const packet = this.assignmentPacket(runId, nodeId, actorId);
     return {
       revision: this.summaryForRun(runId).runtimeRevision,
-      event: this.getEvent(sequence),
-      value: packet,
+      event: this.getEvent(claimed.sequence),
+      value: claimed.packet,
     };
   }
 
@@ -1787,6 +1811,12 @@ export class BurnGraphServiceBase {
         ],
     );
     const assignments = [...this.assignmentsForActor(actorId)];
+    const assignmentOutputBlocks: Array<{
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly requestedBytes: number;
+    }> = [];
+    let assignmentOutputBlockedCount = 0;
     let availableSlots =
       this.config.maxAssignmentsPerActor - assignments.length;
 
@@ -1847,6 +1877,31 @@ export class BurnGraphServiceBase {
             }
             if (
               error instanceof BurnGraphError &&
+              error.code === "ACTOR_ASSIGNMENT_OUTPUT_LIMIT"
+            ) {
+              assignmentOutputBlockedCount += 1;
+              if (
+                assignmentOutputBlocks.length <
+                MAX_ASSIGNMENT_OUTPUT_BLOCK_SAMPLE
+              ) {
+                assignmentOutputBlocks.push({
+                  runId: String(error.details["runId"] ?? candidate.runId),
+                  nodeId: String(error.details["nodeId"] ?? candidate.nodeId),
+                  requestedBytes: Number(
+                    error.details["requestedBytes"] ?? 0,
+                  ),
+                });
+              }
+              if (
+                assignmentOutputBlockedCount >=
+                MAX_ASSIGNMENT_OUTPUT_BLOCK_PROBES
+              ) {
+                availableSlots = 0;
+              }
+              break;
+            }
+            if (
+              error instanceof BurnGraphError &&
               error.retryable &&
               ["NODE_NOT_READY", "RESOURCE_BUSY"].includes(error.code)
             ) {
@@ -1894,6 +1949,13 @@ export class BurnGraphServiceBase {
       remainingReadyCount: allRemainingReady.length,
       activeRunCount: activeRuns.length,
       runs,
+      assignmentOutput: {
+        maximumBytes: MAX_ACTOR_ASSIGNMENT_BYTES,
+        usedBytes: serializedBytes(finalAssignments),
+        limited: assignmentOutputBlockedCount > 0,
+        blockedCount: assignmentOutputBlockedCount,
+        blocked: assignmentOutputBlocks,
+      },
       changes,
     };
   }
@@ -1938,6 +2000,13 @@ export class BurnGraphServiceBase {
       remainingReadyCount: remainingReady.length,
       activeRunCount: activeRuns.length,
       runs,
+      assignmentOutput: {
+        maximumBytes: MAX_ACTOR_ASSIGNMENT_BYTES,
+        usedBytes: serializedBytes(assignments),
+        limited: serializedBytes(assignments) > MAX_ACTOR_ASSIGNMENT_BYTES,
+        blockedCount: 0,
+        blocked: [],
+      },
       changes: [],
     };
   }

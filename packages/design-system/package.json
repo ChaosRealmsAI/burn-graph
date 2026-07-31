@@ -1,6 +1,6 @@
 {
   "name": "@burn-graph/design-system",
-  "version": "0.1.0-rc.1",
+  "version": "1.0.0-dev.1",
   "private": true,
   "type": "module",
   "exports": {

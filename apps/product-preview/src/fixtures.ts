@@ -35,7 +35,7 @@ function node(
 
 const deliveryRoot: GraphSummaryView = {
   id: "delivery-rc1",
-  title: "Converge burn-graph 0.1.0-rc.1",
+  title: "Converge burn-graph 1.0.0-dev.1",
   goal: "Deliver hierarchy, machine evidence, durable waits, templates, and an honest dogfood verdict.",
   status: "running",
   revision: 28,

@@ -1,6 +1,6 @@
 {
   "name": "burn-graph",
-  "version": "0.1.0-rc.1",
+  "version": "1.0.0-dev.1",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.2.17",
@@ -19,7 +19,9 @@
     "build:viewer": "bun --bun vite build --config apps/viewer/vite.config.ts",
     "build:preview": "bun --bun vite build --config apps/product-preview/vite.config.ts",
     "build": "bun run build:cli && bun run build:viewer && bun run build:preview",
-    "release:pack": "bun run build:cli && bun run build:viewer && bun scripts/build/package.ts",
+    "version:sync": "bun scripts/version/sync.ts --write",
+    "version:check": "bun scripts/version/sync.ts --check",
+    "release:pack": "bun run version:check && bun run build:cli && bun run build:viewer && bun scripts/build/package.ts",
     "install:local": "bun run release:pack && bun scripts/install/local.ts",
     "preview": "bun --bun vite --config apps/product-preview/vite.config.ts --host 127.0.0.1",
     "viewer:start": "bun apps/cli/src/index.ts viewer start",
@@ -29,8 +31,9 @@
     "verify:portfolio-performance": "bun scripts/verify/portfolio-performance.ts",
     "verify:control-performance": "bun scripts/verify/control-performance.ts",
     "verify:render-performance": "bun scripts/verify/render-performance.ts",
-    "e2e": "bun run release:pack && bun test tests/e2e",
-    "verify": "bun run check && bun run test && bun run build && bun run e2e && bun run verify:hierarchy-performance && bun run verify:portfolio-performance && bun run verify:control-performance && bun run verify:render-performance"
+    "verify:up11-e2e": "bun tests/e2e/user-paths/UP11-cli-author-run.e2e.ts",
+    "e2e": "bun run release:pack && bun test tests/e2e && bun run verify:up11-e2e",
+    "verify": "bun run version:check && bun run check && bun run test && bun run build && bun run e2e && bun run verify:hierarchy-performance && bun run verify:portfolio-performance && bun run verify:control-performance && bun run verify:render-performance"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.4",

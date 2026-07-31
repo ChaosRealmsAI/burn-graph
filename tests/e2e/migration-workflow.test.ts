@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import packageMetadata from "../../package.json";
+import { confinedInputArgs } from "../helpers/cli.ts";
 import {
   createTestDirectory,
   parallelGraph,
@@ -19,7 +21,7 @@ const candidateArchive = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-rc.1.tgz",
+  `burn-graph-${packageMetadata.version}.tgz`,
 );
 const roots: string[] = [];
 
@@ -46,7 +48,13 @@ async function invoke(
   stdin?: string,
 ): Promise<any> {
   const child = Bun.spawn(
-    ["bun", executable, "--root", root, ...args],
+    [
+      "bun",
+      executable,
+      "--root",
+      root,
+      ...confinedInputArgs(root, args),
+    ],
     {
       cwd: root,
       stdin: stdin === undefined ? "ignore" : "pipe",
@@ -73,7 +81,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) removeTestProject(root);
 });
 
-describe("installed dev.4 to rc.1 migration", () => {
+describe(`installed dev.4 to ${packageMetadata.version} migration`, () => {
   test("preserves nine Runs and ninety public events through the release archive", async () => {
     expect(existsSync(dev4Archive)).toBe(true);
     expect(existsSync(candidateArchive)).toBe(true);

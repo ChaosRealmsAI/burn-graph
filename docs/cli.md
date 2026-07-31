@@ -16,7 +16,9 @@ failure use the same top-level shape:
 
 Failures exit `1` with stable `error.code`, `retryable`, `details`, and exact
 `recoveryActions`. `inspect events --follow` is the only streaming command and
-emits one envelope per JSONL line. Global options precede the command:
+emits one envelope per JSONL line. Each envelope is limited to 256 KiB and
+public output never exposes an absolute project or package path. Global options
+precede the command:
 
 ```bash
 burn-graph --root path/to/project --pretty inspect overview
@@ -26,17 +28,26 @@ burn-graph --root path/to/project --pretty inspect overview
 
 ```bash
 burn-graph init
+burn-graph help authoring
+burn-graph graph example decision
+burn-graph graph schema
 burn-graph graph apply --input graph.json
-burn-graph run start delivery --actor primary
+burn-graph run start delivery
 
 # Execute every returned AssignmentPacket prompt.
 printf '%s' '{"summary":"Verified","evidence":["tests/"]}' |
   burn-graph done --assignment <assignment-id> --input -
 
 # Recover complete packets after interruption or fill empty Actor slots.
-burn-graph current --actor primary
-burn-graph next --actor primary
+burn-graph current
+burn-graph next
 ```
+
+Every structured input accepts a project-relative file or `--input -` for
+stdin. Absolute paths, parent traversal, and paths that escape through a
+symlink are rejected before mutation. JSON input is limited to 2 MiB.
+`graph validate` and `check validate` return bounded normalized size and digest
+receipts; they do not turn a valid large document into an output-limit failure.
 
 `run start`, `run resume`, `next`, `done`, and routed Signal resolution return
 zero or more complete Assignment packets. Before scheduling AI work, their
@@ -44,7 +55,9 @@ bounded System Node Driver runs only registered Gate Checks and materializes or
 settles durable Waits. Each AI packet contains an opaque `assignmentId`, Graph
 and node identity, Attempt, prompt contract, direct predecessor context, legal
 Decision routes, lease, and exact return commands. burn-graph never executes an
-AI prompt.
+AI prompt. One normalized prompt contract is limited to 32 KiB. Completion
+summary, evidence, and route share an 8 KiB successor-context limit;
+node-specific output is not repeated into successor context.
 
 `done` is idempotent for the same Assignment ID and byte-equivalent JSON input.
 A different result for an already completed Assignment returns
@@ -74,7 +87,7 @@ Decision route, summary, and evidence.
 |---|---|
 | Project | `init`, `doctor`, `help` |
 | Templates | `template list`, `template show`, `template instantiate` |
-| GraphSpec | `graph validate`, `graph apply`, `graph list`, `graph show`, `graph clone` |
+| GraphSpec | `graph schema`, `graph example`, `graph validate`, `graph apply`, `graph list`, `graph show`, `graph clone` |
 | CheckSpec | `check validate`, `check apply`, `check list`, `check show` |
 | Run lifecycle | `run start`, `run pause`, `run resume`, `run cancel`, `run priority` |
 | Normal loop | `next`, `current`, `focus`, `done` |
@@ -102,15 +115,23 @@ burn-graph inspect resources
 ```
 
 Normal-loop responses are bounded: at most eight complete Assignment packets,
-eight relevant Run summaries, and 32 Ready preview rows. `activeRunCount` and
+128 KiB of complete packets per Actor, eight relevant Run summaries, and 32
+Ready preview rows. `assignmentOutput` reports packet bytes, the limit, a
+bounded blocked sample, and its full blocked count. `activeRunCount` and
 `remainingReadyCount` preserve the full queue totals; deeper history belongs
 under `inspect`.
+
+If a committed mutation's full response would still exceed 256 KiB, the CLI
+returns exit 0 with a bounded success receipt containing `responseOmitted`,
+the omitted response size and SHA-256, committed-change count, and read-only
+recovery actions. It never converts committed state into an apparent command
+failure. Oversized read-only output remains `OUTPUT_LIMIT_EXCEEDED`.
 
 Lifecycle mutations require a stable retry key:
 
 ```bash
 burn-graph run pause delivery --idempotency-key pause-20260730-1
-burn-graph run resume delivery --actor primary \
+burn-graph run resume delivery \
   --idempotency-key resume-20260730-1
 burn-graph run cancel delivery --idempotency-key cancel-20260730-1
 burn-graph run priority delivery --value high \
@@ -211,6 +232,7 @@ validated cache hit does not require a browser. `doctor` reports this as
 
 ```bash
 burn-graph --help
+burn-graph help authoring
 burn-graph graph --help
 burn-graph done --help
 burn-graph help ai-loop
@@ -223,7 +245,10 @@ burn-graph help recover
 burn-graph help errors
 ```
 
-Root Help returns only command groups, quick start, and links to deeper Help.
+Root Help returns exactly `init`, `template`, `run`, `next`, `current`, `done`,
+`inspect`, and `help`, plus quick start and links to deeper topics. Graph,
+Check, lifecycle, recovery, Signal, render, Viewer, and doctor commands remain
+callable but require explicit progressive Help.
 Area and leaf Help disclose arguments, options, mutation behavior, input,
 output, errors, and next commands. Argument failures retain the recognized
 command label and point to that command's leaf Help. Removed legacy commands

@@ -1,6 +1,6 @@
 # System Node Driver
 
-Status: locked implementation contract for `0.1.0-dev.6`.
+Status: current locked implementation contract.
 
 ## Ownership
 
@@ -17,10 +17,10 @@ Status: locked implementation contract for `0.1.0-dev.6`.
   command-specific recovery actions. It does not choose a route or execute a
   Check directly.
 
-S10 primarily owns `packages/gate`, Check commands, Gate Core transitions, and
-Gate tests. S11 primarily owns Wait Core transitions, Signal commands, and
-Wait tests. Shared contract or migration edits integrate before both slice
-implementations.
+Gate implementation changes own `packages/gate`, Check commands, Gate Core
+transitions, and Gate tests. Wait implementation changes own Wait Core
+transitions, Signal commands, and Wait tests. Shared contract or migration
+edits integrate before either behavior changes.
 
 ## Core transaction boundary
 

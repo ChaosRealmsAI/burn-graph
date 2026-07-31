@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   BurnGraphError,
   BurnGraphService,
+  MAX_ACTOR_ASSIGNMENT_BYTES,
   type GraphSpec,
   type GraphSnapshot,
 } from "@burn-graph/core";
@@ -831,6 +832,76 @@ describe("runtime convergence", () => {
     } finally {
       scheduleService.close();
       removeTestProject(scheduleRoot);
+    }
+  });
+
+  test("stops before complete Assignment packets exceed the Actor output budget", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    try {
+      const base = wideGraph("assignment-output-budget", 8);
+      const graph: GraphSpec = {
+        ...base,
+        nodes: base.nodes.map((node) =>
+          node.type === "task"
+            ? {
+                ...node,
+                prompt: prompt("x".repeat(30_000)),
+              }
+            : node
+        ),
+      };
+      service.applyGraph(graph);
+      service.startRun(
+        "assignment-output-budget",
+        "assignment-output-budget:run",
+      );
+      const schedule = service.schedule(
+        "bounded-output-actor",
+        "assignment-output-budget:run",
+      );
+      expect(schedule.assignments.length).toBeGreaterThan(0);
+      expect(schedule.assignments.length).toBeLessThan(8);
+      expect(schedule.assignmentOutput).toMatchObject({
+        maximumBytes: MAX_ACTOR_ASSIGNMENT_BYTES,
+        limited: true,
+        blockedCount: 1,
+      });
+      expect(schedule.assignmentOutput.usedBytes).toBeLessThanOrEqual(
+        MAX_ACTOR_ASSIGNMENT_BYTES,
+      );
+      expect(schedule.assignmentOutput.blocked).toHaveLength(1);
+      expect(
+        Buffer.byteLength(JSON.stringify(schedule.assignments)),
+      ).toBeLessThanOrEqual(MAX_ACTOR_ASSIGNMENT_BYTES);
+
+      const blocked = schedule.assignmentOutput.blocked[0]!;
+      expect(() =>
+        service.claim(
+          blocked.runId,
+          blocked.nodeId,
+          "bounded-output-actor",
+        )
+      ).toThrow(
+        expect.objectContaining({
+          code: "ACTOR_ASSIGNMENT_OUTPUT_LIMIT",
+        }),
+      );
+      expect(
+        service.getSnapshot(blocked.runId).nodes.find(
+          (node) => node.id === blocked.nodeId,
+        )?.status,
+      ).toBe("ready");
+      expect(
+        Buffer.byteLength(
+          JSON.stringify(
+            service.assignmentsForActor("bounded-output-actor"),
+          ),
+        ),
+      ).toBeLessThanOrEqual(MAX_ACTOR_ASSIGNMENT_BYTES);
+    } finally {
+      service.close();
+      removeTestProject(root);
     }
   });
 

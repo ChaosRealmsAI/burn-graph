@@ -246,10 +246,20 @@ function record(name: string, result: Invocation): void {
 
 try {
   await invoke(temporaryRoot, ["init"]);
-  await invoke(temporaryRoot, ["graph", "apply", "--input", graphFile]);
+  await invoke(temporaryRoot, [
+    "graph",
+    "apply",
+    "--input",
+    path.relative(temporaryRoot, graphFile),
+  ]);
   for (const { root, file } of wideRoots) {
     await invoke(root, ["init"]);
-    await invoke(root, ["graph", "apply", "--input", file]);
+    await invoke(root, [
+      "graph",
+      "apply",
+      "--input",
+      path.relative(root, file),
+    ]);
   }
 
   for (let index = 0; index < sampleCount; index += 1) {
@@ -278,7 +288,12 @@ try {
     const runId = `control-performance-r${index}`;
     record(
       "graph.validate",
-      await invoke(temporaryRoot, ["graph", "validate", "--input", graphFile]),
+      await invoke(temporaryRoot, [
+        "graph",
+        "validate",
+        "--input",
+        path.relative(temporaryRoot, graphFile),
+      ]),
     );
     record(
       "graph.show",

@@ -7,6 +7,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import packageMetadata from "../../package.json";
+import { confinedInputArgs } from "../helpers/cli.ts";
 import {
   createTestDirectory,
   prompt,
@@ -25,7 +27,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-rc.1.tgz",
+  `burn-graph-${packageMetadata.version}.tgz`,
 );
 const roots: string[] = [];
 
@@ -68,7 +70,7 @@ async function invoke(
   const result = await command(
     executable,
     root,
-    ["--root", root, ...args],
+    ["--root", root, ...confinedInputArgs(root, args)],
     stdin,
   );
   expect(result.exitCode, result.stderr).toBe(0);

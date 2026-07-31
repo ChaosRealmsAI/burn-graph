@@ -6,6 +6,14 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
+export const MAX_PROMPT_CONTRACT_BYTES = 32 * 1024;
+export const MAX_COMPLETION_CONTEXT_BYTES = 8 * 1024;
+export const MAX_ACTOR_ASSIGNMENT_BYTES = 128 * 1024;
+
+function serializedBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
 export const IdentifierSchema = z
   .string()
   .trim()
@@ -36,6 +44,16 @@ export const PromptContractSchema = z
     runtime: z.array(z.string().trim().min(1).max(2_000)).default([]),
   })
   .strict()
+  .superRefine((value, context) => {
+    const bytes = serializedBytes(value);
+    if (bytes > MAX_PROMPT_CONTRACT_BYTES) {
+      context.addIssue({
+        code: "custom",
+        message:
+          `complete prompt contract exceeds ${MAX_PROMPT_CONTRACT_BYTES} UTF-8 bytes`,
+      });
+    }
+  })
   .default({
     objective: "",
     instructions: [],
@@ -500,7 +518,21 @@ export const CompletionInputSchema = z
     evidence: z.array(z.string().trim().min(1).max(2_000)).default([]),
     route: IdentifierSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const bytes = serializedBytes({
+      summary: value.summary,
+      evidence: value.evidence,
+      route: value.route ?? null,
+    });
+    if (bytes > MAX_COMPLETION_CONTEXT_BYTES) {
+      context.addIssue({
+        code: "custom",
+        message:
+          `completion summary, evidence, and route exceed ${MAX_COMPLETION_CONTEXT_BYTES} UTF-8 bytes`,
+      });
+    }
+  });
 export type CompletionInput = z.infer<typeof CompletionInputSchema>;
 
 export const DynamicSubgraphOutputSchema = z
@@ -984,6 +1016,17 @@ export interface WorkSchedule {
   readonly remainingReadyCount: number;
   readonly activeRunCount: number;
   readonly runs: readonly GraphSummary[];
+  readonly assignmentOutput: {
+    readonly maximumBytes: number;
+    readonly usedBytes: number;
+    readonly limited: boolean;
+    readonly blockedCount: number;
+    readonly blocked: readonly {
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly requestedBytes: number;
+    }[];
+  };
   readonly changes: readonly RuntimeChange[];
 }
 

@@ -80,7 +80,10 @@ set. Static Subgraph, Gate, and Wait are package-driven System Nodes.
 
 Omitted prompt arrays, `actorHint`, `tags`, and `maxAttempts` receive normalized
 defaults during validation. `actorHint` affects scheduler ranking but does not
-restrict ownership.
+restrict ownership. The complete normalized prompt contract is at most 32 KiB.
+An Actor owns at most 128 KiB of complete Assignment packets, so scheduling may
+return fewer than its eight-slot count; the machine-readable
+`assignmentOutput` field distinguishes this bound from an empty queue.
 
 ## Version 2 hierarchy
 
@@ -90,11 +93,11 @@ prompt fields `role`, `lockedContracts`, `writablePaths`, `forbidden`, and
 require version 2. Version 2 adds `subgraph`, `gate`, and `wait` nodes while
 keeping the CLI response envelope at schema version 1.
 
-In `0.1.0-dev.6`, Gate and Wait execute through the package-owned bounded
-System Node Driver. A Gate pins an immutable CheckSpec revision registered
-with `check apply`; a Wait creates one durable opaque Signal and consumes no
-Actor slot. Mutating loop commands converge these System Nodes before returning
-AI Assignments, while all inspection and rendering commands remain inert.
+Gate and Wait execute through the package-owned bounded System Node Driver. A
+Gate pins an immutable CheckSpec revision registered with `check apply`; a Wait
+creates one durable opaque Signal and consumes no Actor slot. Mutating loop
+commands converge these System Nodes before returning AI Assignments, while all
+inspection and rendering commands remain inert.
 
 A static Subgraph pins one to 32 exact child Graph revisions:
 
@@ -177,3 +180,8 @@ transactionally consistent projection and never mutate it.
 
 Use `burn-graph graph validate --input graph.json` before
 `burn-graph graph apply --input graph.json`.
+
+Completion `summary`, `evidence`, and optional Decision `route` together are at
+most 8 KiB because they become direct-predecessor context. Node-specific
+`output` is validated and persisted but is not copied into successor prompt
+context.

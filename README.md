@@ -10,11 +10,12 @@ unlocks and returns successors across parallel nodes and multiple graphs.
 With Bun 1.2.17 or newer, installation is one local package command:
 
 ```bash
-bun add --global ./burn-graph-0.1.0-rc.1.tgz
+bun add --global ./burn-graph-1.0.0-dev.1.tgz
 burn-graph --version
+burn-graph --help
 ```
 
-The release archive is about 1.1 MB, contains the bundled CLI and Viewer, and
+The release archive is about 1.2 MB, contains the bundled CLI and Viewer, and
 declares zero package dependencies. To build and install directly from this
 repository, run `bun run install:local`.
 
@@ -23,14 +24,18 @@ repository, run `bun run install:local`.
 ```bash
 burn-graph init
 burn-graph template list
+burn-graph template show vertical-slice
 burn-graph template instantiate vertical-slice --input template-input.json
 # Or author directly:
+burn-graph help authoring
+burn-graph graph example decision
+burn-graph graph schema
 burn-graph graph apply --input graph.json
-burn-graph run start delivery --actor main
+burn-graph run start delivery
 # Execute every returned Assignment prompt, then:
 burn-graph done --assignment <id> --input result.json
 # Done returns the next zero or more Assignments automatically.
-burn-graph current --actor main
+burn-graph current
 burn-graph inspect overview
 burn-graph inspect metrics
 burn-graph render delivery
@@ -54,7 +59,8 @@ hits work without a browser.
 
 Every bounded command, including Help, version, and errors, returns a stable
 JSON envelope. Start with `burn-graph --help` or
-`burn-graph help ai-loop`.
+`burn-graph help authoring`. The complete installed workflow is in
+[USAGE.md](USAGE.md).
 
 See [installation](docs/install.md), [the CLI contract](docs/cli.md), and the
 [GraphSpec reference](docs/graph-spec.md). Template, priority, resource, and

@@ -632,6 +632,8 @@ export function listTemplates(): readonly (typeof catalog.templates)[number][] {
 export function showTemplate(templateId: string): {
   readonly template: (typeof catalog.templates)[number];
   readonly input: Readonly<Record<string, unknown>>;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
+  readonly exampleInput: TemplateInstantiationInput;
 } {
   const id = TemplateIdSchema.safeParse(templateId);
   if (!id.success) {
@@ -664,6 +666,33 @@ export function showTemplate(templateId: string): {
       ],
       promptOverrides:
         "bounded nodeId plus objective/instructions/doneWhen only",
+    },
+    inputSchema: {
+      ...z.toJSONSchema(TemplateInstantiationInputSchema, {
+        target: "draft-2020-12",
+        unrepresentable: "any",
+      }),
+      $id: "burn-graph://schema/template-instantiation-input",
+      title: "TemplateInstantiationInput",
+      description:
+        "Complete input schema for burn-graph template instantiate.",
+    },
+    exampleInput: {
+      schemaVersion: 1,
+      idempotencyKey: `example-${id.data}-1`,
+      graphId: `example-${id.data}`,
+      revision: 1,
+      title: `Example ${template.title}`,
+      goal: `Complete one bounded ${template.title.toLowerCase()} outcome.`,
+      include: [],
+      context: {
+        mustRead: [],
+        lockedContracts: [],
+        writablePaths: ["src"],
+        forbidden: ["Do not change unrelated files."],
+        runtime: ["burn-graph inspect overview"],
+      },
+      promptOverrides: [],
     },
   };
 }

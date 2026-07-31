@@ -11,6 +11,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import packageMetadata from "../../package.json";
+import { confinedInputArgs } from "../helpers/cli.ts";
 import {
   createTestDirectory,
   parallelGraph,
@@ -33,7 +35,7 @@ const archiveFile = path.join(
   repositoryRoot,
   "dist",
   "releases",
-  "burn-graph-0.1.0-rc.1.tgz",
+  `burn-graph-${packageMetadata.version}.tgz`,
 );
 const roots: string[] = [];
 
@@ -73,7 +75,11 @@ async function installedCli(
 ): Promise<any> {
   const result = await command(
     executable,
-    ["--root", projectRoot, ...args],
+    [
+      "--root",
+      projectRoot,
+      ...confinedInputArgs(projectRoot, args),
+    ],
     {
       cwd: projectRoot,
       ...(stdin === undefined ? {} : { stdin }),
@@ -131,6 +137,22 @@ describe("lightweight Bun package", () => {
     expect(archiveListing.exitCode, archiveListing.stderr).toBe(0);
     expect(archiveListing.stdout).toContain("package/viewer/render.html");
     expect(archiveListing.stdout).toContain("package/templates/catalog.json");
+    for (
+      const asset of [
+        "package/USAGE.md",
+        "package/help/root.json",
+        "package/help/authoring.json",
+        "package/schema/graph-spec.json",
+        "package/examples/flat.json",
+        "package/examples/decision.json",
+        "package/examples/hierarchy.json",
+        "package/examples/gate.json",
+        "package/examples/wait.json",
+        "package/examples/template-delivery.json",
+      ]
+    ) {
+      expect(archiveListing.stdout).toContain(asset);
+    }
     expect(archiveListing.stdout).not.toMatch(
       /(?:^|\/)(?:privacy|bdd|milestones|slices|issues|feedback)(?:\/|$)|product\.md/,
     );
@@ -227,7 +249,7 @@ describe("lightweight Bun package", () => {
       schemaVersion: 1,
       ok: true,
       command: "version",
-      data: { version: "0.1.0-rc.1" },
+      data: { version: packageMetadata.version },
     });
 
     const installedPackage = path.join(
@@ -239,10 +261,54 @@ describe("lightweight Bun package", () => {
     );
     const installedManifest = JSON.parse(
       readFileSync(path.join(installedPackage, "package.json"), "utf8"),
-    ) as { readonly dependencies?: unknown };
+    ) as { readonly version?: unknown; readonly dependencies?: unknown };
+    expect(installedManifest.version).toBe(packageMetadata.version);
     expect(installedManifest.dependencies).toBeUndefined();
     const installedBytes = directoryBytes(installedPackage);
     expect(installedBytes).toBeLessThan(5_000_000);
+    const installedReadme = readFileSync(
+      path.join(installedPackage, "README.md"),
+      "utf8",
+    );
+    for (const match of installedReadme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+      const target = match[1]!;
+      if (
+        target.startsWith("#") ||
+        /^[A-Za-z][A-Za-z0-9+.-]*:/.test(target)
+      ) {
+        continue;
+      }
+      expect(
+        existsSync(path.resolve(installedPackage, target)),
+        `broken packaged README link: ${target}`,
+      ).toBe(true);
+    }
+    const installedRootHelp = await installedCli(
+      executable,
+      projectRoot,
+      ["--help"],
+    );
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(installedPackage, "help", "root.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual(installedRootHelp);
+    const installedSchema = await installedCli(
+      executable,
+      projectRoot,
+      ["graph", "schema"],
+    );
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(installedPackage, "schema", "graph-spec.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual(installedSchema);
 
     const graphFile = path.join(projectRoot, "graph.json");
     writeFileSync(
@@ -505,7 +571,7 @@ describe("lightweight Bun package", () => {
         "instantiate",
         "poc",
         "--input",
-        invalidTemplateInput,
+        path.basename(invalidTemplateInput),
       ],
       { cwd: projectRoot },
     );
