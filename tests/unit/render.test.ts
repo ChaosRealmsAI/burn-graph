@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
   rmdirSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -20,10 +25,20 @@ import {
   cacheIdentity,
   discoverRenderBrowser,
   pngDimensions,
+  readCachedArtifact,
   resolveRenderAssetsDirectory,
   sha256,
   validateSvg,
 } from "@burn-graph/render/testing";
+import { MERMAID_VERSION } from "@burn-graph/design-system/mermaid-config";
+import {
+  RENDERER_NAME,
+  RENDERER_VERSION,
+} from "../../packages/render/src/contracts.ts";
+import {
+  pruneOlderRevisions,
+  readCachedArtifactSnapshot,
+} from "../../packages/render/src/cache.ts";
 
 import {
   createTestDirectory,
@@ -185,6 +200,194 @@ describe("render artifact boundaries", () => {
           causeCode: "ENOTDIR",
         });
       }
+    } finally {
+      removeTestProject(root);
+    }
+  });
+
+  test("rejects a symlinked render cache before writing outside the project", async () => {
+    const root = createTestDirectory();
+    try {
+      initializeProject(root, "2026-07-29T00:00:00.000Z");
+      const service = new BurnGraphService(root);
+      let snapshot;
+      try {
+        service.applyGraph(parallelGraph("render-cache-boundary"));
+        snapshot = service.startRun(
+          "render-cache-boundary",
+          "render-cache-boundary:run",
+        ).value;
+      } finally {
+        service.close();
+      }
+
+      const renderRoot = path.join(
+        root,
+        ".burn", "graph",
+        "runtime",
+        "renders",
+      );
+      const outside = path.join(root, "outside-render-cache");
+      mkdirSync(outside);
+      writeFileSync(path.join(outside, "sentinel.txt"), "unchanged\n");
+      rmSync(renderRoot, { recursive: true, force: true });
+      symlinkSync(outside, renderRoot);
+
+      try {
+        await renderGraphArtifact({
+          projectRoot: root,
+          snapshot,
+          format: "svg",
+        });
+        throw new Error("Expected the symlinked render cache to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(BurnGraphError);
+        expect((error as BurnGraphError).code).toBe("RENDER_FAILED");
+        expect((error as BurnGraphError).message).toContain(
+          ".burn/graph/runtime/renders",
+        );
+      }
+      expect(readdirSync(outside)).toEqual(["sentinel.txt"]);
+      expect(readFileSync(path.join(outside, "sentinel.txt"), "utf8")).toBe(
+        "unchanged\n",
+      );
+    } finally {
+      removeTestProject(root);
+    }
+  });
+
+  test("reads cached manifest and artifact through the state boundary", () => {
+    const root = createTestDirectory();
+    try {
+      initializeProject(root, "2026-07-29T00:00:00.000Z");
+      const identity = cacheIdentity({
+        projectRoot: root,
+        runId: "render-read-boundary:run",
+        graphId: "render-read-boundary",
+        runtimeRevision: 1,
+        sourceHash: sha256("flowchart LR"),
+        format: "svg",
+      });
+      mkdirSync(identity.runDirectory, { recursive: true });
+      const svg = '<svg viewBox="0 0 10 10"></svg>';
+      const outside = path.join(root, "outside-render-read");
+      mkdirSync(outside);
+      const outsidePeer = path.join(outside, "peer.svg");
+      writeFileSync(outsidePeer, svg);
+      linkSync(outsidePeer, identity.artifactFile);
+      const manifest = {
+        schemaVersion: 1,
+        runId: identity.runId,
+        graphId: identity.graphId,
+        runtimeRevision: identity.runtimeRevision,
+        scope: identity.scope,
+        projectionDepth: identity.projectionDepth,
+        sourceHash: identity.sourceHash,
+        format: identity.format,
+        theme: "dark",
+        artifact: identity.artifact,
+        bytes: Buffer.byteLength(svg),
+        sha256: sha256(svg),
+        width: 10,
+        height: 10,
+        cached: false,
+        renderer: {
+          name: RENDERER_NAME,
+          version: RENDERER_VERSION,
+          mermaidVersion: MERMAID_VERSION,
+          browser: { name: "test", version: "1" },
+        },
+      };
+      writeFileSync(
+        identity.manifestFile,
+        JSON.stringify(manifest) + "\n",
+      );
+
+      expect(readCachedArtifact(identity)).toMatchObject({
+        cached: true,
+        artifact: identity.artifact,
+      });
+      const snapshot = readCachedArtifactSnapshot(identity);
+      expect(snapshot?.text).toBe(svg);
+      expect(snapshot?.artifact.sha256).toBe(sha256(snapshot?.text ?? ""));
+      expect(snapshot?.artifact.bytes).toBe(
+        Buffer.byteLength(snapshot?.text ?? ""),
+      );
+      expect(snapshot?.artifact.width).toBe(validateSvg(svg).width);
+      expect(snapshot?.artifact.height).toBe(validateSvg(svg).height);
+      expect(readFileSync(outsidePeer, "utf8")).toBe(svg);
+
+      const corruptIdentity = cacheIdentity({
+        projectRoot: root,
+        runId: "render-corrupt-boundary:run",
+        graphId: identity.graphId,
+        runtimeRevision: identity.runtimeRevision,
+        sourceHash: identity.sourceHash,
+        format: identity.format,
+      });
+      mkdirSync(corruptIdentity.runDirectory, { recursive: true });
+      writeFileSync(corruptIdentity.artifactFile, "corrupted artifact\n");
+      writeFileSync(
+        corruptIdentity.manifestFile,
+        JSON.stringify({
+          ...manifest,
+          runId: corruptIdentity.runId,
+          artifact: corruptIdentity.artifact,
+        }) + "\n",
+      );
+      expect(readCachedArtifactSnapshot(corruptIdentity)).toBeNull();
+    } finally {
+      removeTestProject(root);
+    }
+  });
+
+  test("cache manifest, artifact, and prune reads reject final namesakes", () => {
+    const root = createTestDirectory();
+    try {
+      initializeProject(root, "2026-07-29T00:00:00.000Z");
+      const identity = cacheIdentity({
+        projectRoot: root,
+        runId: "render-final-read-boundary:run",
+        graphId: "render-final-read-boundary",
+        runtimeRevision: 1,
+        sourceHash: sha256("flowchart LR"),
+        format: "svg",
+      });
+      mkdirSync(identity.runDirectory, { recursive: true });
+      const outside = path.join(root, "outside-render-final-read");
+      mkdirSync(outside);
+      const outsideManifest = path.join(outside, "manifest.json");
+      const outsideArtifact = path.join(outside, "artifact.svg");
+      const outsideStale = path.join(outside, "stale.json");
+      writeFileSync(outsideManifest, "outside manifest\n");
+      writeFileSync(outsideArtifact, "outside artifact\n");
+      writeFileSync(outsideStale, "outside stale\n");
+
+      symlinkSync(outsideManifest, identity.manifestFile);
+      expectBurnGraphError(
+        () => readCachedArtifact(identity),
+        "RENDER_FAILED",
+      );
+      expect(readFileSync(outsideManifest, "utf8")).toBe("outside manifest\n");
+
+      rmSync(identity.manifestFile);
+      symlinkSync(outsideArtifact, identity.artifactFile);
+      expectBurnGraphError(
+        () => readCachedArtifact(identity),
+        "RENDER_FAILED",
+      );
+      expect(readFileSync(outsideArtifact, "utf8")).toBe("outside artifact\n");
+
+      rmSync(identity.artifactFile);
+      symlinkSync(
+        outsideStale,
+        path.join(identity.runDirectory, "stale.json"),
+      );
+      expectBurnGraphError(
+        () => pruneOlderRevisions(identity),
+        "RENDER_FAILED",
+      );
+      expect(readFileSync(outsideStale, "utf8")).toBe("outside stale\n");
     } finally {
       removeTestProject(root);
     }

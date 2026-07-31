@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import { BurnGraphError } from "@burn-graph/core";
 import {
   MERMAID_BACKGROUND,
@@ -10,6 +8,7 @@ import {
   cacheIdentity,
   pruneOlderRevisions,
   readCachedArtifact,
+  readCachedArtifactSnapshot,
   storeArtifact,
   withCacheLock,
 } from "./cache.ts";
@@ -126,12 +125,8 @@ async function renderGraphArtifactInternal(
         sourceHash,
         format: "svg",
       });
-      const cachedSvg = readCachedArtifact(svgIdentity);
-      const cachedSvgText = cachedSvg
-        ? Bun.file(path.resolve(options.projectRoot, cachedSvg.artifact))
-        : null;
-      const existingSvg =
-        cachedSvgText === null ? null : await cachedSvgText.text();
+      const cachedSvgSnapshot = readCachedArtifactSnapshot(svgIdentity);
+      const existingSvg = cachedSvgSnapshot?.text ?? null;
       const rendered = await renderInIsolatedBrowser({
         assetsDirectory,
         browser,
@@ -151,7 +146,7 @@ async function renderGraphArtifactInternal(
           `${snapshot.summary.graphId} Run ${snapshot.summary.runId}, runtime revision ${snapshot.summary.runtimeRevision}.`,
         );
       const svgValidation = validateSvg(finalSvg);
-      let svgArtifact = cachedSvg;
+      let svgArtifact = cachedSvgSnapshot?.artifact ?? null;
       if (!svgArtifact) {
         svgArtifact = storeArtifact(
           svgIdentity,

@@ -1,9 +1,60 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 import { Database } from "bun:sqlite";
 
-import { runtimeDatabaseFile } from "./project.ts";
+import {
+  assertProjectStatePath,
+  ensureProjectFile,
+  inspectProjectFile,
+  publishProjectFile,
+  runtimeDatabaseFile,
+  STATE_DIRECTORY,
+} from "./project.ts";
+import { BurnGraphError } from "./contracts.ts";
+
+function detachLinkedDatabase(file: string, projectRoot: string): void {
+  const admission = inspectProjectFile(file, projectRoot);
+  if (
+    admission.targetGeneration === null ||
+    admission.linkCount === null ||
+    admission.linkCount <= 1n
+  ) {
+    return;
+  }
+
+  let reader: Database | undefined;
+  try {
+    // SQLite's serialized image includes pages visible through WAL, so this
+    // read-only snapshot preserves recoverable state before the mutable open.
+    reader = new Database(file, { readonly: true, strict: true });
+    const serialized = reader.serialize();
+    reader.close();
+    reader = undefined;
+    publishProjectFile(file, serialized, projectRoot, {
+      expectedAdmission: admission,
+      mode: admission.mode ?? 0o600,
+    });
+  } catch (error) {
+    try {
+      reader?.close();
+    } catch {
+      // Preserve the actionable boundary error below.
+    }
+    throw new BurnGraphError(
+      "UNSAFE_STATE_ROOT",
+      "The existing state.sqlite is hardlinked outside the project and could " +
+        "not be detached without risking recoverable SQLite state; close " +
+        "other SQLite users and retry.",
+      false,
+      {
+        statePath: STATE_DIRECTORY + "/runtime/state.sqlite",
+        recovery: "Close other SQLite users and retry.",
+        cause: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
+}
 
 export class BurnGraphDatabase {
   readonly db: Database;
@@ -11,17 +62,35 @@ export class BurnGraphDatabase {
 
   constructor(readonly projectRoot: string) {
     const file = runtimeDatabaseFile(projectRoot);
-    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const runtime = assertProjectStatePath(
+      projectRoot,
+      path.join(STATE_DIRECTORY, "runtime"),
+      "directory",
+      true,
+    );
+    mkdirSync(runtime, { recursive: true, mode: 0o700 });
+    assertProjectStatePath(
+      projectRoot,
+      path.join(STATE_DIRECTORY, "runtime"),
+      "directory",
+      false,
+    );
+    detachLinkedDatabase(file, projectRoot);
+    ensureProjectFile(file, projectRoot);
     this.db = new Database(file, { create: true, strict: true });
+    // The open itself is not kernel-atomic with the userspace checks above;
+    // this final check keeps ordinary replacement visible without overstating
+    // protection from a hostile writer (P004).
+    assertProjectStatePath(
+      projectRoot,
+      path.join(STATE_DIRECTORY, "runtime", "state.sqlite"),
+      "file",
+      false,
+    );
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.migrate();
-    try {
-      chmodSync(file, 0o600);
-    } catch {
-      // Non-POSIX filesystems still retain the project-local storage boundary.
-    }
   }
 
   close(): void {

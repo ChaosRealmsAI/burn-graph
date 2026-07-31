@@ -1,19 +1,21 @@
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
-  renameSync,
   rmdirSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { safeChmod } from "@burn-graph/core";
-
-import { BurnGraphError, STATE_DIRECTORY } from "@burn-graph/core";
+import {
+  assertProjectStateBoundary,
+  assertProjectStatePath,
+  BurnGraphError,
+  inspectProjectFile,
+  publishProjectFile,
+  readProjectFile,
+  STATE_DIRECTORY,
+} from "@burn-graph/core";
 import {
   MERMAID_THEME,
   MERMAID_VERSION,
@@ -50,6 +52,10 @@ interface StoredArtifact extends Omit<RenderArtifact, "cached"> {
   readonly cached: false;
 }
 
+export interface CachedArtifactSnapshot {
+  readonly artifact: RenderArtifact;
+  readonly text: string | null;
+}
 
 function runSlug(runId: string): string {
   const prefix = runId.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 64);
@@ -108,13 +114,67 @@ export function cacheIdentity(input: {
   };
 }
 
-function atomicWrite(target: string, value: Uint8Array | string): void {
-  mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  safeChmod(path.dirname(target), 0o700);
-  const temporary = `${target}.tmp-${process.pid}-${crypto.randomUUID()}`;
-  writeFileSync(temporary, value, { mode: 0o600 });
-  renameSync(temporary, target);
-  safeChmod(target, 0o600);
+function stateRelative(projectRoot: string, target: string): string {
+  return path.relative(path.resolve(projectRoot), path.resolve(target));
+}
+
+function renderBoundaryFailure(error: BurnGraphError): BurnGraphError {
+  const statePath =
+    typeof error.details["statePath"] === "string"
+      ? error.details["statePath"]
+      : "the render cache";
+  return new BurnGraphError(
+    "RENDER_FAILED",
+    `Graph render cache path ${statePath} is unsafe; replace it with a real ` +
+      "project-local path, then retry.",
+    true,
+    {
+      causeCode: error.message.includes("not a directory")
+        ? "ENOTDIR"
+        : error.message.includes("not a regular file")
+          ? "EISDIR"
+          : "ELOOP",
+    },
+  );
+}
+
+function validateCachePath(
+  identity: CacheIdentity,
+  target: string,
+  kind: "directory" | "file",
+  allowMissing = true,
+): void {
+  try {
+    assertProjectStatePath(
+      identity.projectRoot,
+      stateRelative(identity.projectRoot, target),
+      kind,
+      allowMissing,
+    );
+  } catch (error) {
+    if (!(error instanceof BurnGraphError) || error.code !== "UNSAFE_STATE_ROOT") {
+      throw error;
+    }
+    throw renderBoundaryFailure(error);
+  }
+}
+
+function validateCacheBoundary(identity: CacheIdentity): void {
+  try {
+    assertProjectStateBoundary(identity.projectRoot);
+    validateCachePath(identity, identity.runDirectory, "directory");
+    validateCachePath(identity, identity.artifactFile, "file");
+    validateCachePath(identity, identity.manifestFile, "file");
+    validateCachePath(identity, identity.lockDirectory, "directory");
+  } catch (error) {
+    if (error instanceof BurnGraphError && error.code === "RENDER_FAILED") {
+      throw error;
+    }
+    if (!(error instanceof BurnGraphError) || error.code !== "UNSAFE_STATE_ROOT") {
+      throw error;
+    }
+    throw renderBoundaryFailure(error);
+  }
 }
 
 function validStoredArtifact(
@@ -147,33 +207,53 @@ function validStoredArtifact(
   );
 }
 
-export function readCachedArtifact(
+function readCacheFile(
   identity: CacheIdentity,
-): RenderArtifact | null {
-  if (
-    !existsSync(identity.manifestFile) ||
-    !existsSync(identity.artifactFile)
-  ) {
-    return null;
+  target: string,
+): Uint8Array | null {
+  try {
+    const admission = inspectProjectFile(target, identity.projectRoot);
+    if (admission.targetGeneration === null) return null;
+    return readProjectFile(target, identity.projectRoot).bytes;
+  } catch (error) {
+    if (error instanceof BurnGraphError && error.code === "UNSAFE_STATE_ROOT") {
+      throw renderBoundaryFailure(error);
+    }
+    throw error;
   }
+}
+
+export function readCachedArtifactSnapshot(
+  identity: CacheIdentity,
+): CachedArtifactSnapshot | null {
+  validateCacheBoundary(identity);
+  const manifestBytes = readCacheFile(identity, identity.manifestFile);
+  if (manifestBytes === null) return null;
+  const artifactBytes = readCacheFile(identity, identity.artifactFile);
+  if (artifactBytes === null) return null;
   try {
     const parsed: unknown = JSON.parse(
-      readFileSync(identity.manifestFile, "utf8"),
+      Buffer.from(manifestBytes).toString("utf8"),
     );
     if (!validStoredArtifact(parsed, identity)) return null;
     const stored = parsed;
-    const bytes = readFileSync(identity.artifactFile);
+    const bytes = Buffer.from(artifactBytes);
     if (bytes.length !== stored.bytes || sha256(bytes) !== stored.sha256) {
       return null;
     }
     if (identity.format === "svg") {
-      const dimensions = validateSvg(bytes.toString("utf8"));
+      const text = bytes.toString("utf8");
+      const dimensions = validateSvg(text);
       if (
         dimensions.width !== stored.width ||
         dimensions.height !== stored.height
       ) {
         return null;
       }
+      return {
+        artifact: { ...stored, cached: true },
+        text,
+      };
     } else {
       const dimensions = pngDimensions(bytes);
       if (
@@ -182,11 +262,20 @@ export function readCachedArtifact(
       ) {
         return null;
       }
+      return {
+        artifact: { ...stored, cached: true },
+        text: null,
+      };
     }
-    return { ...stored, cached: true };
   } catch {
     return null;
   }
+}
+
+export function readCachedArtifact(
+  identity: CacheIdentity,
+): RenderArtifact | null {
+  return readCachedArtifactSnapshot(identity)?.artifact ?? null;
 }
 
 export function storeArtifact(
@@ -195,6 +284,7 @@ export function storeArtifact(
   dimensions: { readonly width: number; readonly height: number },
   browser: PublicRenderBrowser,
 ): RenderArtifact {
+  validateCacheBoundary(identity);
   const buffer = typeof bytes === "string" ? Buffer.from(bytes) : Buffer.from(bytes);
   const stored: StoredArtifact = {
     schemaVersion: 1,
@@ -219,8 +309,12 @@ export function storeArtifact(
       browser,
     },
   };
-  atomicWrite(identity.artifactFile, buffer);
-  atomicWrite(identity.manifestFile, `${JSON.stringify(stored, null, 2)}\n`);
+  publishProjectFile(identity.artifactFile, buffer, identity.projectRoot);
+  publishProjectFile(
+    identity.manifestFile,
+    `${JSON.stringify(stored, null, 2)}\n`,
+    identity.projectRoot,
+  );
   return stored;
 }
 
@@ -242,12 +336,15 @@ export async function withCacheLock<T>(
   operation: () => Promise<T>,
   waitMs: number,
 ): Promise<T> {
+  validateCacheBoundary(identity);
   mkdirSync(identity.runDirectory, { recursive: true, mode: 0o700 });
-  safeChmod(identity.runDirectory, 0o700);
+  validateCachePath(identity, identity.runDirectory, "directory", false);
   const startedAt = Date.now();
   for (;;) {
     try {
+      validateCachePath(identity, identity.lockDirectory, "directory");
       mkdirSync(identity.lockDirectory, { mode: 0o700 });
+      validateCachePath(identity, identity.lockDirectory, "directory", false);
       break;
     } catch (error) {
       const code =
@@ -287,12 +384,16 @@ export async function withCacheLock<T>(
 export function pruneOlderRevisions(
   identity: CacheIdentity,
 ): void {
+  validateCacheBoundary(identity);
   if (!existsSync(identity.runDirectory)) return;
   for (const entry of readdirSync(identity.runDirectory)) {
     if (!entry.endsWith(".json") || entry === `${identity.key}.json`) continue;
     const manifest = path.join(identity.runDirectory, entry);
+    validateCachePath(identity, manifest, "file", false);
+    const manifestBytes = readCacheFile(identity, manifest);
+    if (manifestBytes === null) continue;
     try {
-      const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
+      const parsed = JSON.parse(Buffer.from(manifestBytes).toString("utf8")) as {
         readonly runId?: unknown;
         readonly runtimeRevision?: unknown;
         readonly scope?: unknown;
@@ -314,14 +415,19 @@ export function pruneOlderRevisions(
       }
       const artifact = path.resolve(identity.projectRoot, parsed.artifact);
       if (artifact.startsWith(`${identity.runDirectory}${path.sep}`)) {
+        validateCachePath(identity, artifact, "file");
         try {
           unlinkSync(artifact);
         } catch {
           // Missing stale artifacts need no separate recovery.
         }
       }
+      validateCachePath(identity, manifest, "file", false);
       unlinkSync(manifest);
-    } catch {
+    } catch (error) {
+      if (error instanceof BurnGraphError && error.code === "RENDER_FAILED") {
+        throw error;
+      }
       // Unknown files are preserved because this cleanup owns only valid manifests.
     }
   }

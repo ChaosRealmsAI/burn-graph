@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
   existsSync,
   linkSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   unlinkSync,
   writeFileSync,
@@ -20,9 +18,12 @@ import {
   type TemplateInstantiationRequest,
 } from "./contracts.ts";
 import {
+  assertProjectStateBoundary,
+  assertProjectStatePath,
   STATE_DIRECTORY,
   atomicWriteJson,
   graphFile,
+  readProjectFile,
 } from "./project.ts";
 import { json, numberValue, stringValue, type Row } from "./sql.ts";
 import type { BurnGraphDatabase } from "./storage.ts";
@@ -89,14 +90,29 @@ function confinedJournalPath(root: string, candidate: string): string {
       "Template transaction journal escapes runtime storage",
     );
   }
-  return resolved;
+  return assertProjectStatePath(
+    root,
+    path.relative(path.resolve(root), resolved),
+    "file",
+    true,
+  );
 }
 
 function parseJournal(root: string, file: string): TemplateTransactionJournal {
+  assertProjectStatePath(
+    root,
+    path.relative(path.resolve(root), file),
+    "file",
+    false,
+  );
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(file, "utf8"));
-  } catch {
+    const snapshot = readProjectFile(file, root);
+    parsed = JSON.parse(Buffer.from(snapshot.bytes).toString("utf8"));
+  } catch (error) {
+    if (error instanceof BurnGraphError && error.code === "UNSAFE_STATE_ROOT") {
+      throw error;
+    }
     throw new BurnGraphError(
       "CORRUPT_STATE",
       `Template transaction journal ${path.basename(file)} is invalid`,
@@ -133,6 +149,7 @@ function parseJournal(root: string, file: string): TemplateTransactionJournal {
   }
   const stagedPaths = new Set<string>();
   const targetPaths = new Set<string>();
+  const files: Array<{ readonly staged: string; readonly target: string }> = [];
   for (const item of journal.files) {
     if (
       typeof item !== "object" ||
@@ -160,23 +177,37 @@ function parseJournal(root: string, file: string): TemplateTransactionJournal {
         "Template target escapes project graph storage",
       );
     }
-    if (stagedPaths.has(staged) || targetPaths.has(target)) {
+    const confinedTarget = assertProjectStatePath(
+      root,
+      path.relative(path.resolve(root), target),
+      "file",
+      true,
+    );
+    if (stagedPaths.has(staged) || targetPaths.has(confinedTarget)) {
       throw new BurnGraphError(
         "CORRUPT_STATE",
         "Template transaction journal repeats an output path",
       );
     }
     stagedPaths.add(staged);
-    targetPaths.add(target);
+    targetPaths.add(confinedTarget);
+    files.push({ staged, target: confinedTarget });
   }
-  return journal;
+  return { ...journal, files };
 }
 
 export function recoverTemplateTransactions(
   root: string,
   database: BurnGraphDatabase,
 ): void {
+  assertProjectStateBoundary(root);
   const directory = journalDirectory(root);
+  assertProjectStatePath(
+    root,
+    path.join(STATE_DIRECTORY, "runtime", "template-transactions"),
+    "directory",
+    true,
+  );
   if (!existsSync(directory)) return;
   database.immediate(() => {
     const journals = readdirSync(directory)
@@ -194,6 +225,18 @@ export function recoverTemplateTransactions(
         .get(journal.idempotencyKey) as Row | null;
       if (committed) {
         for (const item of journal.files) {
+          assertProjectStatePath(
+            root,
+            path.relative(path.resolve(root), item.target),
+            "file",
+            true,
+          );
+          assertProjectStatePath(
+            root,
+            path.relative(path.resolve(root), item.staged),
+            "file",
+            true,
+          );
           if (!existsSync(item.target) && existsSync(item.staged)) {
             linkSync(item.staged, item.target);
           }
@@ -207,6 +250,18 @@ export function recoverTemplateTransactions(
         }
       } else {
         for (const item of journal.files) {
+          assertProjectStatePath(
+            root,
+            path.relative(path.resolve(root), item.target),
+            "file",
+            true,
+          );
+          assertProjectStatePath(
+            root,
+            path.relative(path.resolve(root), item.staged),
+            "file",
+            true,
+          );
           safeUnlink(item.target);
           safeUnlink(item.staged);
         }
@@ -264,6 +319,7 @@ export class TemplateRegistry {
     request: TemplateInstantiationRequest,
   ): TemplateInstantiationReceipt {
     validateRequest(request);
+    assertProjectStateBoundary(this.options.root);
     recoverTemplateTransactions(this.options.root, this.options.database);
 
     const existing = this.options.database.db
@@ -296,8 +352,32 @@ export class TemplateRegistry {
       "graphs",
     );
     const transactionDirectory = journalDirectory(this.options.root);
+    assertProjectStatePath(
+      this.options.root,
+      path.join(STATE_DIRECTORY, "graphs"),
+      "directory",
+      true,
+    );
+    assertProjectStatePath(
+      this.options.root,
+      path.join(STATE_DIRECTORY, "runtime", "template-transactions"),
+      "directory",
+      true,
+    );
     mkdirSync(graphDirectory, { recursive: true, mode: 0o700 });
     mkdirSync(transactionDirectory, { recursive: true, mode: 0o700 });
+    assertProjectStatePath(
+      this.options.root,
+      path.join(STATE_DIRECTORY, "graphs"),
+      "directory",
+      false,
+    );
+    assertProjectStatePath(
+      this.options.root,
+      path.join(STATE_DIRECTORY, "runtime", "template-transactions"),
+      "directory",
+      false,
+    );
     const transactionId = crypto.randomUUID();
     const files = graphs.map((graph) => {
       const target = graphFile(this.options.root, graph.id);
@@ -329,6 +409,7 @@ export class TemplateRegistry {
       })),
     };
     const createdTargets: string[] = [];
+    const createdStaged: string[] = [];
     const at = this.options.timestamp();
     const receipt: TemplateInstantiationReceipt = {
       schemaVersion: 1,
@@ -376,18 +457,26 @@ export class TemplateRegistry {
         }
         // Persist recovery intent under the SQLite writer lock before the
         // first filesystem side effect.
-        atomicWriteJson(journalFile, journal);
+        atomicWriteJson(journalFile, journal, this.options.root);
         for (const item of files) {
+          assertProjectStatePath(
+            this.options.root,
+            path.relative(path.resolve(this.options.root), item.staged),
+            "file",
+            true,
+          );
           writeFileSync(item.staged, item.document, {
             encoding: "utf8",
             mode: 0o600,
             flag: "wx",
           });
-          try {
-            chmodSync(item.staged, 0o600);
-          } catch {
-            // Non-POSIX filesystems still retain the project-local boundary.
-          }
+          createdStaged.push(item.staged);
+          assertProjectStatePath(
+            this.options.root,
+            path.relative(path.resolve(this.options.root), item.staged),
+            "file",
+            false,
+          );
         }
         for (const item of files) {
           this.options.database.db
@@ -404,6 +493,18 @@ export class TemplateRegistry {
             );
         }
         for (const item of files) {
+          assertProjectStatePath(
+            this.options.root,
+            path.relative(path.resolve(this.options.root), item.target),
+            "file",
+            true,
+          );
+          assertProjectStatePath(
+            this.options.root,
+            path.relative(path.resolve(this.options.root), item.staged),
+            "file",
+            false,
+          );
           linkSync(item.staged, item.target);
           createdTargets.push(item.target);
         }
@@ -426,7 +527,7 @@ export class TemplateRegistry {
       });
       committed = true;
       this.options.database.immediate(() => {
-        for (const item of files) safeUnlink(item.staged);
+        for (const staged of createdStaged) safeUnlink(staged);
         safeUnlink(journalFile);
       });
       return result;
@@ -434,7 +535,7 @@ export class TemplateRegistry {
       if (!committed) {
         this.options.database.immediate(() => {
           for (const target of createdTargets) safeUnlink(target);
-          for (const item of files) safeUnlink(item.staged);
+          for (const staged of createdStaged) safeUnlink(staged);
           safeUnlink(journalFile);
         });
       }

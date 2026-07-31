@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -325,6 +327,44 @@ describe("package template catalog", () => {
     }
   });
 
+  test("rejects a symlinked template transaction root before outside writes", () => {
+    const root = createTestProject();
+    const service = new BurnGraphService(root);
+    const outside = path.join(root, "outside-template-runtime");
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "sentinel.txt"), "unchanged\n");
+    const transactions = path.join(
+      root,
+      ".burn", "graph",
+      "runtime",
+      "template-transactions",
+    );
+    try {
+      symlinkSync(outside, transactions);
+      let thrown: unknown;
+      try {
+        service.instantiateTemplate(
+          generateTemplate(
+            "poc",
+            input("template-runtime-boundary"),
+            "template-runtime-boundary-key",
+          ),
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(BurnGraphError);
+      expect((thrown as BurnGraphError).code).toBe("UNSAFE_STATE_ROOT");
+      expect(readdirSync(outside)).toEqual(["sentinel.txt"]);
+      expect(readFileSync(path.join(outside, "sentinel.txt"), "utf8")).toBe(
+        "unchanged\n",
+      );
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
   test("recovers seeded hard-crash journals before and after receipt commit", () => {
     const root = createTestProject();
     let service = new BurnGraphService(root);
@@ -414,6 +454,50 @@ describe("package template catalog", () => {
       expect(service.getGraph("committed-template")).toEqual(
         generation.graphs[0]!,
       );
+    } finally {
+      service.close();
+      removeTestProject(root);
+    }
+  });
+
+  test("journal reads preserve a hardlinked outside peer", () => {
+    const root = createTestProject();
+    let service = new BurnGraphService(root);
+    const transactions = path.join(
+      root,
+      ".burn",
+      "graph",
+      "runtime",
+      "template-transactions",
+    );
+    const transactionId = "33333333-3333-4333-8333-333333333333";
+    const journal = path.join(
+      transactions,
+      `${transactionId}.journal.json`,
+    );
+    const staged = path.join(transactions, `${transactionId}-staged.json`);
+    const target = graphFile(root, "hardlinked-journal");
+    const payload = `${JSON.stringify({
+      schemaVersion: 1,
+      transactionId,
+      idempotencyKey: "hardlinked-journal-key",
+      files: [{ staged, target }],
+    })}\n`;
+    const outsidePeer = path.join(root, "outside-journal-peer.json");
+    try {
+      mkdirSync(transactions, { recursive: true });
+      writeFileSync(staged, "{}\n");
+      writeFileSync(target, "{}\n");
+      writeFileSync(outsidePeer, payload);
+      linkSync(outsidePeer, journal);
+
+      service.close();
+      service = new BurnGraphService(root);
+
+      expect(readFileSync(outsidePeer, "utf8")).toBe(payload);
+      expect(existsSync(journal)).toBe(false);
+      expect(existsSync(staged)).toBe(false);
+      expect(existsSync(target)).toBe(false);
     } finally {
       service.close();
       removeTestProject(root);

@@ -31,6 +31,32 @@ interface ChildResult {
   readonly stderr: string;
 }
 
+interface ClaimNodeRow {
+  readonly run_id: string;
+  readonly node_id: string;
+  readonly status: string;
+  readonly attempt: number;
+  readonly assignment_id: string | null;
+  readonly actor_id: string | null;
+  readonly lease_expires_at: string | null;
+  readonly heartbeat_at: string | null;
+  readonly updated_at: string;
+}
+
+interface RunRow {
+  readonly run_id: string;
+  readonly runtime_revision: number;
+  readonly scheduler_ready_at: string | null;
+  readonly updated_at: string;
+}
+
+interface FocusRow {
+  readonly actor_id: string;
+  readonly run_id: string;
+  readonly node_id: string;
+  readonly updated_at: string;
+}
+
 function runChild(args: readonly string[]): ChildResult {
   const result = Bun.spawnSync(["bun", child, ...args], {
     cwd: repositoryRoot,
@@ -57,12 +83,13 @@ function externalClaimState(
   nodeId: string,
   actorId: string,
 ): {
-  readonly node: unknown;
+  readonly node: ClaimNodeRow;
   readonly attempts: readonly unknown[];
   readonly claimedEvents: readonly unknown[];
   readonly eventCount: number;
-  readonly runtimeRevision: number;
-  readonly focus: unknown;
+  readonly eventSequence: { readonly seq: number } | null;
+  readonly run: RunRow;
+  readonly focus: FocusRow | null;
   readonly resourceLocks: readonly unknown[];
 } {
   const database = new Database(
@@ -73,20 +100,22 @@ function externalClaimState(
     return {
       node: database
         .query(
-          `SELECT status, attempt, assignment_id, actor_id, lease_expires_at,
-                  heartbeat_at
+          `SELECT run_id, node_id, status, attempt, assignment_id, actor_id,
+                  lease_expires_at, heartbeat_at, updated_at
              FROM node_runs WHERE run_id = ? AND node_id = ?`,
         )
-        .get(runId, nodeId) as unknown,
+        .get(runId, nodeId) as ClaimNodeRow,
       attempts: database
         .query(
-          `SELECT attempt, status, assignment_id, actor_id
+          `SELECT run_id, node_id, attempt, status, assignment_id, actor_id,
+                  result_json, checkpoint_json, route, started_at, finished_at
              FROM attempts WHERE run_id = ? AND node_id = ? ORDER BY attempt`,
         )
         .all(runId, nodeId) as unknown[],
       claimedEvents: database
         .query(
-          `SELECT sequence, type FROM events
+          `SELECT sequence, run_id, graph_id, node_id, type, summary,
+                  payload_json, created_at FROM events
             WHERE run_id = ? AND node_id = ? AND type = 'node.claimed'
             ORDER BY sequence`,
         )
@@ -96,19 +125,25 @@ function externalClaimState(
           .query("SELECT COUNT(*) AS count FROM events WHERE run_id = ?")
           .get(runId) as { count: number }
       ).count,
-      runtimeRevision: (
-        database
-          .query("SELECT runtime_revision AS revision FROM runs WHERE run_id = ?")
-          .get(runId) as { revision: number }
-      ).revision,
+      eventSequence: database
+        .query("SELECT seq FROM sqlite_sequence WHERE name = 'events'")
+        .get() as { readonly seq: number } | null,
+      run: database
+        .query(
+          `SELECT run_id, runtime_revision, scheduler_ready_at, updated_at
+             FROM runs WHERE run_id = ?`,
+        )
+        .get(runId) as RunRow,
       focus: database
         .query(
-          "SELECT run_id, node_id FROM actor_focus WHERE actor_id = ?",
+          `SELECT actor_id, run_id, node_id, updated_at
+             FROM actor_focus WHERE actor_id = ?`,
         )
-        .get(actorId) as unknown,
+        .get(actorId) as FocusRow | null,
       resourceLocks: database
         .query(
-          `SELECT resource, owner_id FROM resource_locks
+          `SELECT resource, owner_kind, owner_id, root_run_id, run_id, node_id,
+                  expires_at, created_at FROM resource_locks
             WHERE run_id = ? AND node_id = ? ORDER BY resource`,
         )
         .all(runId, nodeId) as unknown[],
@@ -170,15 +205,24 @@ describe("I0011 external claim rollback Oracle", () => {
 
     const after = externalClaimState(root, runId, nodeId, actorId);
     expect(after).not.toEqual(before);
-    expect((after.node as any).status).toBe("running");
-    expect((after.node as any).assignment_id).not.toBeNull();
+    expect(after.node.status).toBe("running");
+    expect(after.node.assignment_id).not.toBeNull();
     expect(after.attempts.length).toBeGreaterThan(before.attempts.length);
     expect(after.claimedEvents.length).toBeGreaterThan(
       before.claimedEvents.length,
     );
     expect(after.eventCount).toBeGreaterThan(before.eventCount);
-    expect(after.runtimeRevision).toBeGreaterThan(before.runtimeRevision);
-    expect(after.focus).toEqual({ run_id: runId, node_id: nodeId });
+    expect(after.eventSequence?.seq).toBeGreaterThan(
+      before.eventSequence?.seq ?? 0,
+    );
+    expect(after.run.runtime_revision).toBeGreaterThan(
+      before.run.runtime_revision,
+    );
+    expect(after.focus).toMatchObject({
+      actor_id: actorId,
+      run_id: runId,
+      node_id: nodeId,
+    });
     expect(after.resourceLocks.length).toBeGreaterThan(
       before.resourceLocks.length,
     );
@@ -208,14 +252,15 @@ describe("I0011 external claim rollback Oracle", () => {
     // One equality over the whole Oracle, then the named rows, so a future
     // partial rollback fails on the specific row rather than only in aggregate.
     expect(after).toEqual(before);
-    expect((after.node as any).status).toBe("ready");
-    expect((after.node as any).assignment_id).toBeNull();
-    expect((after.node as any).actor_id).toBeNull();
+    expect(after.node.status).toBe("ready");
+    expect(after.node.assignment_id).toBeNull();
+    expect(after.node.actor_id).toBeNull();
     expect(after.attempts).toEqual([]);
     expect(after.claimedEvents).toEqual([]);
     expect(after.eventCount).toBe(before.eventCount);
-    expect(after.runtimeRevision).toBe(before.runtimeRevision);
-    expect(after.focus).not.toEqual({ run_id: runId, node_id: nodeId });
+    expect(after.eventSequence).toEqual(before.eventSequence);
+    expect(after.run).toEqual(before.run);
+    expect(after.focus).toEqual(before.focus);
     expect(after.resourceLocks).toEqual([]);
   });
 });

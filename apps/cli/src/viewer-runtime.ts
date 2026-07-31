@@ -1,19 +1,25 @@
 import {
   closeSync,
+  constants,
   existsSync,
   mkdirSync,
   openSync,
-  readFileSync,
-  renameSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
 import {
+  assertProjectFileDescriptorGeneration,
+  assertProjectStateBoundary,
+  assertProjectStatePath,
   BurnGraphError,
+  detachProjectFile,
   discoverProjectRoot,
+  inspectProjectFile,
+  publishProjectFile,
+  readProjectFile,
+  STATE_DIRECTORY,
 } from "@burn-graph/core";
 
 export interface ViewerRecord {
@@ -50,22 +56,47 @@ function requireName(value: string): string {
 }
 
 function runtimeRoot(projectRoot: string): string {
-  return path.join(projectRoot, ".burn", "graph", "runtime", "viewers");
+  return path.join(projectRoot, STATE_DIRECTORY, "runtime", "viewers");
 }
 
 function recordFile(projectRoot: string, name: string): string {
   return path.join(runtimeRoot(projectRoot), `${name}.json`);
 }
 
+function stateRelative(projectRoot: string, target: string): string {
+  return path.relative(path.resolve(projectRoot), path.resolve(target));
+}
+
+function validateViewerPath(
+  projectRoot: string,
+  target: string,
+  kind: "directory" | "file",
+  allowMissing = true,
+): void {
+  assertProjectStatePath(
+    projectRoot,
+    stateRelative(projectRoot, target),
+    kind,
+    allowMissing,
+  );
+}
+
 function readRecord(projectRoot: string, name: string): ViewerRecord {
   const file = recordFile(projectRoot, name);
-  if (!existsSync(file)) {
+  assertProjectStateBoundary(projectRoot);
+  validateViewerPath(projectRoot, runtimeRoot(projectRoot), "directory");
+  validateViewerPath(projectRoot, file, "file");
+  const admission = inspectProjectFile(file, projectRoot);
+  if (admission.targetGeneration === null) {
     throw new BurnGraphError(
       "VIEWER_NOT_FOUND",
       `No Viewer instance named ${name}`,
     );
   }
-  const record = JSON.parse(readFileSync(file, "utf8")) as Partial<ViewerRecord>;
+  const snapshot = readProjectFile(file, projectRoot);
+  const record = JSON.parse(
+    Buffer.from(snapshot.bytes).toString("utf8"),
+  ) as Partial<ViewerRecord>;
   if (
     record.schemaVersion !== 1 ||
     record.name !== name ||
@@ -87,15 +118,16 @@ function readRecord(projectRoot: string, name: string): ViewerRecord {
 }
 
 function writeRecord(record: ViewerRecord): void {
+  assertProjectStateBoundary(record.projectRoot);
   const directory = runtimeRoot(record.projectRoot);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  validateViewerPath(record.projectRoot, directory, "directory");
   const target = recordFile(record.projectRoot, record.name);
-  const temporary = `${target}.tmp-${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(temporary, target);
+  validateViewerPath(record.projectRoot, target, "file");
+  publishProjectFile(
+    target,
+    `${JSON.stringify(record, null, 2)}\n`,
+    record.projectRoot,
+  );
 }
 
 function processCommand(pid: number): string | null {
@@ -154,6 +186,27 @@ function publicStatus(
   };
 }
 
+export function openViewerLog(projectRoot: string, logFile: string): number {
+  detachProjectFile(logFile, projectRoot);
+  validateViewerPath(projectRoot, logFile, "file");
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(
+      logFile,
+      constants.O_WRONLY |
+        constants.O_APPEND |
+        constants.O_CREAT |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    assertProjectFileDescriptorGeneration(logFile, descriptor, projectRoot);
+    return descriptor;
+  } catch (error) {
+    if (descriptor !== undefined) closeSync(descriptor);
+    throw error;
+  }
+}
+
 export async function startViewerInstance(
   rootInput: string,
   nameInput: string,
@@ -169,6 +222,9 @@ export async function startViewerInstance(
     );
   }
   const file = recordFile(projectRoot, name);
+  assertProjectStateBoundary(projectRoot);
+  validateViewerPath(projectRoot, runtimeRoot(projectRoot), "directory");
+  validateViewerPath(projectRoot, file, "file");
   if (existsSync(file)) {
     const existing = readRecord(projectRoot, name);
     if (isOwnedViewer(existing)) {
@@ -178,6 +234,7 @@ export async function startViewerInstance(
         true,
       );
     }
+    validateViewerPath(projectRoot, file, "file", false);
     unlinkSync(file);
   }
 
@@ -189,9 +246,11 @@ export async function startViewerInstance(
     );
   }
   const directory = runtimeRoot(projectRoot);
+  validateViewerPath(projectRoot, directory, "directory");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  validateViewerPath(projectRoot, directory, "directory", false);
   const logFile = path.join(directory, `${name}.log`);
-  const logDescriptor = openSync(logFile, "a", 0o600);
+  const logDescriptor = openViewerLog(projectRoot, logFile);
   const instanceToken = crypto.randomUUID();
   const child = spawn(
     process.execPath,
@@ -248,7 +307,10 @@ export async function startViewerInstance(
     await Bun.sleep(100);
   }
   if (isOwnedViewer(record)) process.kill(record.pid, "SIGTERM");
-  if (existsSync(file)) unlinkSync(file);
+  if (existsSync(file)) {
+    validateViewerPath(projectRoot, file, "file", false);
+    unlinkSync(file);
+  }
   throw new BurnGraphError(
     "VIEWER_START_FAILED",
     `Viewer did not become healthy; inspect ${logFile}`,
@@ -285,6 +347,7 @@ export async function stopViewerInstance(
   const file = recordFile(projectRoot, name);
   const command = processCommand(record.pid);
   if (command === null) {
+    validateViewerPath(projectRoot, file, "file", false);
     unlinkSync(file);
     return {
       name,
@@ -303,6 +366,7 @@ export async function stopViewerInstance(
   process.kill(record.pid, "SIGTERM");
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (processCommand(record.pid) === null) {
+      validateViewerPath(projectRoot, file, "file", false);
       unlinkSync(file);
       return { name, pid: record.pid, stopped: true };
     }
@@ -315,6 +379,7 @@ export async function stopViewerInstance(
     );
   }
   process.kill(record.pid, "SIGKILL");
+  validateViewerPath(projectRoot, file, "file", false);
   unlinkSync(file);
   return { name, pid: record.pid, stopped: true, forced: true };
 }

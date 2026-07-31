@@ -19,10 +19,15 @@ import {
 const repositoryRoot = path.resolve(import.meta.dir, "../..");
 const dev4Archive = path.join(
   repositoryRoot,
-  "dist",
+  "tests",
+  "fixtures",
   "releases",
   "burn-graph-0.1.0-dev.4.tgz",
 );
+// Golden CLI built from repository commit 531ce12, the final dev.4 source.
+// Pinning its bytes keeps the migration Oracle independent of generated dist/.
+const DEV4_ARCHIVE_SHA256 =
+  "c1bba3acb4acb3a8a31108a85691237b9d2d10f2b92724329ca8aaa871081546";
 const candidateArchive = path.join(
   repositoryRoot,
   "dist",
@@ -139,6 +144,8 @@ describe(`installed dev.4 state under ${packageMetadata.version}`, () => {
   test("refuses the legacy root untouched and only re-registers specifications", async () => {
     expect(existsSync(dev4Archive)).toBe(true);
     expect(existsSync(candidateArchive)).toBe(true);
+    expect(createHash("sha256").update(readFileSync(dev4Archive)).digest("hex"))
+      .toBe(DEV4_ARCHIVE_SHA256);
     const dev4 = await extractArchive(dev4Archive);
     const candidate = await extractArchive(candidateArchive);
     const projectRoot = createTestDirectory();
