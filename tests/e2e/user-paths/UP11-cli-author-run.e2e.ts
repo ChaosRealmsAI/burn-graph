@@ -1,5 +1,14 @@
 // Purpose: Replay UP11 through an isolated installation of one exact archive.
 // Usage: bun tests/e2e/user-paths/UP11-cli-author-run.e2e.ts [--archive <tgz>] [--output <directory>]
+//        bun tests/e2e/user-paths/UP11-cli-author-run.e2e.ts --fault <kind>
+//
+// P011: a Gate that only ever meets a correct product proves nothing. `--fault`
+// installs the same archive and then routes every public command through a
+// wrapper that corrupts one semantic answer while keeping the envelope shape,
+// exit status and byte budget intact. In that mode this script inverts its
+// verdict — it exits 0 only when the User Path judged the wrong product red, at
+// the step that owns the corrupted claim — and writes no Evidence, because a Gate
+// self-test is not a User Path record.
 
 import { createHash } from "node:crypto";
 import {
@@ -98,6 +107,88 @@ const evidenceGenerator = path.join(
   "verify",
   "e2e-evidence.ts",
 );
+
+// Each fault is one semantically wrong answer plus the step that must catch it.
+// Naming the step is what makes the self-test a Gate rather than a smoke test:
+// failing anywhere else means the harness stopped for the wrong reason.
+const FAULTS: Readonly<Record<string, { readonly step: string }>> = {
+  "help-surface": { step: "01" },
+  "completion-state": { step: "05" },
+  "packaged-help-drift": { step: "07" },
+};
+
+function faultKind(): string | null {
+  const inputs = Bun.argv.slice(2);
+  const index = inputs.indexOf("--fault");
+  if (index === -1) return null;
+  const value = inputs[index + 1];
+  if (value === undefined || !(value in FAULTS)) {
+    throw new Error(
+      `--fault requires one of ${Object.keys(FAULTS).join(", ")}`,
+    );
+  }
+  return value;
+}
+
+const fault = faultKind();
+
+// The wrapper is a real executable in front of the real installed command, so the
+// harness exercises the same process boundary, JSON framing and byte budget it
+// exercises against the product. Only one field of one response differs.
+function installFaultWrapper(directory: string, real: string, kind: string): string {
+  const script = path.join(directory, "burn-graph-fault.ts");
+  writeFileSync(
+    script,
+    `#!/usr/bin/env bun
+const real = ${JSON.stringify(real)};
+const kind = ${JSON.stringify(kind)};
+const args = Bun.argv.slice(2);
+const result = Bun.spawnSync([real, ...args], {
+  stdin: "inherit",
+  stdout: "pipe",
+  stderr: "pipe",
+});
+let stdout = result.stdout.toString();
+function corrupt(envelope) {
+  // Root Help publishes one command too many: the eight-entry daily loop is the
+  // claim step 01 owns.
+  if (kind === "help-surface" && args.includes("--help")) {
+    envelope.data.commands = [
+      ...envelope.data.commands,
+      { name: "graph", summary: "leaked advanced area", help: "burn-graph graph --help" },
+    ];
+    return true;
+  }
+  // The Run is completed but reported as still assigned: step 05 owns agreement
+  // between the mutation receipt and the read-only snapshot.
+  if (kind === "completion-state" && args.includes("done")) {
+    envelope.data.state = "assigned";
+    return true;
+  }
+  // Root Help drifts from the asset shipped inside the archive without changing
+  // the eight-command surface, so only step 07 can catch it.
+  if (kind === "packaged-help-drift" && args.includes("--help")) {
+    envelope.data.summary = "drifted summary the packaged asset does not carry";
+    return true;
+  }
+  return false;
+}
+if (result.exitCode === 0 && stdout.trim().split("\\n").length === 1) {
+  try {
+    const envelope = JSON.parse(stdout.trim());
+    if (corrupt(envelope)) stdout = JSON.stringify(envelope) + "\\n";
+  } catch {
+    // A non-JSON response is not a response this fault targets.
+  }
+}
+process.stdout.write(stdout);
+process.stderr.write(result.stderr.toString());
+process.exit(result.exitCode);
+`,
+    { mode: 0o755 },
+  );
+  return script;
+}
 
 function assert(
   condition: unknown,
@@ -348,6 +439,9 @@ try {
       executable = path.join(bin.stdout.trim(), "burn-graph");
       assert(existsSync(executable), "installed burn-graph command is missing");
       installedPackage = path.dirname(realpathSync(executable));
+      if (fault !== null) {
+        executable = installFaultWrapper(testRoot, executable, fault);
+      }
       const manifest = object(
         JSON.parse(
           readFileSync(path.join(installedPackage, "package.json"), "utf8"),
@@ -768,6 +862,32 @@ try {
   };
 } finally {
   const finishedAt = now();
+  if (fault !== null) {
+    const expectedStep = FAULTS[fault]!.step;
+    const resolvedTestRoot = path.resolve(testRoot);
+    assert(
+      resolvedTestRoot.startsWith(path.join(tmpdir(), "burn-graph-up11-")),
+      "refusing to remove an unexpected test directory",
+    );
+    rmSync(resolvedTestRoot, { recursive: true, force: true });
+    const caught = failure !== null && failure.stepId === expectedStep;
+    process.stdout.write(
+      `${JSON.stringify({
+        schemaVersion: 1,
+        ok: caught,
+        command: "verify.up11.fault",
+        data: {
+          fault,
+          expectedStep,
+          observedStep: failure?.stepId ?? null,
+          observed: failure?.summary ?? "the User Path passed a wrong product",
+        },
+      })}\n`,
+    );
+    // A Gate that stays green against a semantically wrong product is the defect,
+    // so this is the one place where "the run passed" is the failure.
+    process.exitCode = caught ? 0 : 1;
+  } else {
   if (steps.length === 0) {
     steps.push({
       id: "00",
@@ -911,9 +1031,12 @@ try {
     "refusing to remove an unexpected test directory",
   );
   rmSync(resolvedTestRoot, { recursive: true, force: true });
+  }
 }
 
-if (failure !== null) {
+if (fault !== null) {
+  // The verdict was already written by the self-test branch above.
+} else if (failure !== null) {
   process.stderr.write(
     `${JSON.stringify({
       schemaVersion: 1,

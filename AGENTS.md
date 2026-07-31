@@ -78,6 +78,8 @@ product contract.
 - Viewer status: `bun run viewer:status -- <name>`
 - Stop named Viewer: `bun run viewer:stop -- <name>`
 - Blackbox E2E: `bun run e2e`
+- UP11 from the exact archive: `bun run verify:up11-e2e`
+- Prove UP11 judges a wrong product red: `bun run verify:up11-red`
 - Five-sample 100-node render budget: `bun run verify:render-performance`
 - 128-root portfolio budget: `bun run verify:portfolio-performance`
 
