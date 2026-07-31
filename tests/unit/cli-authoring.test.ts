@@ -12,6 +12,42 @@ import {
   showTemplate,
 } from "@burn-graph/templates";
 
+// Known-bad first, for both halves of the surface. These tests exist to prove the
+// oracles below can fail: `validateGraphSpec` and the template input schema are
+// what every green assertion here delegates to, so an accepting stub would make
+// the rest of this file pass while the installed CLI shipped broken examples.
+describe("installed CLI authoring contract judges known-bad input red", () => {
+  test("judges an incomplete example red", () => {
+    const complete = graphExample("flat").graph;
+    expect(() =>
+      validateGraphSpec({
+        ...complete,
+        nodes: complete.nodes.filter((node) => node.type !== "end"),
+      }),
+    ).toThrow();
+  });
+
+  test("judges a semantically wrong template input red", () => {
+    const shown = showTemplate("delivery");
+    // Identifiers must start with a letter, so this is rejected by the same
+    // schema the green case parses, not by an unrelated type error.
+    expect(() =>
+      TemplateInstantiationInputSchema.parse({
+        ...(shown.exampleInput as Record<string, unknown>),
+        graphId: "9-not-an-identifier",
+      }),
+    ).toThrow();
+    expect(() =>
+      TemplateInstantiationInputSchema.parse({
+        ...(shown.exampleInput as Record<string, unknown>),
+        goal: "",
+      }),
+    ).toThrow();
+    expect(() => generateTemplate("no-such-template", shown.exampleInput))
+      .toThrow();
+  });
+});
+
 describe("installed CLI authoring contract", () => {
   test("returns one complete bounded GraphSpec schema", () => {
     const schema = graphSchemaDocument() as any;
@@ -43,16 +79,6 @@ describe("installed CLI authoring contract", () => {
       expect(example.application.file).toBeDefined();
       expect(example.application.stdin).toBeDefined();
     }
-  });
-
-  test("proves an incomplete example judges red", () => {
-    const complete = graphExample("flat").graph;
-    expect(() =>
-      validateGraphSpec({
-        ...complete,
-        nodes: complete.nodes.filter((node) => node.type !== "end"),
-      }),
-    ).toThrow();
   });
 
   test("returns one directly valid complete input for every template", () => {
