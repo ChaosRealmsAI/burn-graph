@@ -197,7 +197,7 @@ burn-graph render delivery --scope tree --depth 1 --limit 500
 ```
 
 `render` reads the canonical Run snapshot and returns bounded metadata for a
-file beneath `.burn-graph/runtime/renders/`. SVG is the default. Metadata
+file beneath `.burn/graph/runtime/renders/`. SVG is the default. Metadata
 includes the Run and Graph IDs, runtime revision, scope, projection depth,
 source hash, project-relative artifact path, dimensions, bytes, SHA-256, cache
 status, and renderer versions. It does not change Run revision or events.
@@ -258,12 +258,27 @@ fail as invalid arguments: `work`, top-level `events`, top-level `mermaid`,
 ## Local state
 
 ```text
-.burn-graph/
+.burn/graph/
 ├── config.json
 ├── graphs/          # normalized, versionable GraphSpecs
 ├── checks/          # normalized, versionable immutable CheckSpecs
 └── runtime/         # ignored SQLite, WAL, Viewer records, and render cache
 ```
+
+`.burn/` is the shared project state root of every Burn product; burn-graph
+owns only `.burn/graph/`. Discovery walks parents from the working directory,
+adopts the first directory containing `.burn/`, and stops at `$HOME`. `init`
+creates `.burn/graph/` at the exact directory it is given and adds one
+`.burn/graph/runtime/` entry to the project `.gitignore`, leaving GraphSpecs
+and CheckSpecs versionable.
+
+A pre-3.0 `.burn-graph/` directory without `.burn/graph/` fails every command
+with `LEGACY_STATE_ROOT`: state is never migrated, read, or written through the
+legacy root. Run `init`, then re-register the specifications kept in
+`.burn-graph/graphs` and `.burn-graph/checks` with `graph apply` and
+`check apply`; Run history under `.burn-graph/runtime` does not carry over.
+Once `.burn/graph/` exists it wins, and `doctor` reports the leftover as
+`legacyStateRoot` until it is gone.
 
 Every Run pins an immutable GraphSpec revision. Editing JSON does not mutate a
 Run; `graph apply` validates and registers a strictly newer revision.

@@ -16,7 +16,7 @@ export class WaitSignalRestartPoc {
   private readonly database: Database;
 
   constructor(projectRoot: string) {
-    const runtime = path.join(projectRoot, ".burn-graph", "runtime");
+    const runtime = path.join(projectRoot, ".burn", "graph", "runtime");
     mkdirSync(runtime, { recursive: true, mode: 0o700 });
     this.database = new Database(path.join(runtime, "wait-signal-poc.sqlite"), {
       create: true,

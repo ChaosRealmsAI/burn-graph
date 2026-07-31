@@ -213,7 +213,7 @@ describe("package template catalog", () => {
           {
             graphId: "local-slice",
             revision: 1,
-            path: ".burn-graph/graphs/local-slice.json",
+            path: ".burn/graph/graphs/local-slice.json",
           },
         ],
       });
@@ -306,7 +306,7 @@ describe("package template catalog", () => {
       ).toBe(0);
       const journals = path.join(
         root,
-        ".burn-graph",
+        ".burn", "graph",
         "runtime",
         "template-transactions",
       );
@@ -330,7 +330,7 @@ describe("package template catalog", () => {
     let service = new BurnGraphService(root);
     const transactions = path.join(
       root,
-      ".burn-graph",
+      ".burn", "graph",
       "runtime",
       "template-transactions",
     );

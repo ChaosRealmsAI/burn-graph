@@ -5,7 +5,7 @@
 // claim had happened, so a service that reported failure while holding committed
 // state would still have passed.
 //
-// The Gate therefore reads .burn-graph/runtime/state.sqlite with a plain
+// The Gate therefore reads .burn/graph/runtime/state.sqlite with a plain
 // bun:sqlite handle, from a process that never opened a BurnGraphService, after
 // the writer exited. Its first assertion is that a committing double judges red.
 
@@ -66,7 +66,7 @@ function externalClaimState(
   readonly resourceLocks: readonly unknown[];
 } {
   const database = new Database(
-    path.join(root, ".burn-graph", "runtime", "state.sqlite"),
+    path.join(root, ".burn", "graph", "runtime", "state.sqlite"),
     { readonly: true, strict: true },
   );
   try {

@@ -220,7 +220,7 @@ describe("template portfolio public path", () => {
       graphs: [{
         graphId: "template-bugfix",
         revision: 1,
-        path: ".burn-graph/graphs/template-bugfix.json",
+        path: ".burn/graph/graphs/template-bugfix.json",
       }],
     });
     expect(
@@ -262,7 +262,7 @@ describe("template portfolio public path", () => {
     ).toHaveLength(7);
     expect(
       existsSync(
-        path.join(root, ".burn-graph", "graphs", "template-concurrent.json"),
+        path.join(root, ".burn", "graph", "graphs", "template-concurrent.json"),
       ),
     ).toBe(true);
 
@@ -280,7 +280,7 @@ describe("template portfolio public path", () => {
     expect(unsupported.error.code).toBe("TEMPLATE_STAGE_NOT_SUPPORTED");
     expect(
       existsSync(
-        path.join(root, ".burn-graph", "graphs", "template-unsupported.json"),
+        path.join(root, ".burn", "graph", "graphs", "template-unsupported.json"),
       ),
     ).toBe(false);
 
@@ -297,7 +297,7 @@ describe("template portfolio public path", () => {
     ]);
     expect(
       existsSync(
-        path.join(root, ".burn-graph", "graphs", "template-invalid.json"),
+        path.join(root, ".burn", "graph", "graphs", "template-invalid.json"),
       ),
     ).toBe(false);
 

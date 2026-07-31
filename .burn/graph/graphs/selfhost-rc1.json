@@ -63,7 +63,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",
@@ -140,7 +140,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",
@@ -217,7 +217,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",
@@ -282,7 +282,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",
@@ -347,7 +347,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",
@@ -412,7 +412,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",
@@ -502,7 +502,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",
@@ -567,7 +567,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph",
+          ".burn/graph",
           "apps",
           "packages",
           "scripts",

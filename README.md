@@ -48,9 +48,9 @@ loop commands converge them automatically, while `current`, `inspect`,
 
 Graph specifications are inspectable JSON, runtime state is transactional
 SQLite, and the human surface is a local read-only Mermaid viewer.
-Applied definitions live in `.burn-graph/graphs/` and immutable Checks in
-`.burn-graph/checks/`; both can be versioned;
-ephemeral SQLite state stays ignored beneath `.burn-graph/runtime/`.
+Applied definitions live in `.burn/graph/graphs/` and immutable Checks in
+`.burn/graph/checks/`; both can be versioned;
+ephemeral SQLite state stays ignored beneath `.burn/graph/runtime/`.
 
 `render` returns metadata for a cached project-local SVG by default; use
 `--format png` for a bounded bitmap. Cache misses use a new isolated headless

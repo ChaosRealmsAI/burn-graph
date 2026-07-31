@@ -401,7 +401,7 @@ describe("lightweight Bun package", () => {
       replayed: false,
       graphs: [{
         graphId: "installed-template-bugfix",
-        path: ".burn-graph/graphs/installed-template-bugfix.json",
+        path: ".burn/graph/graphs/installed-template-bugfix.json",
       }],
     });
     expect(
@@ -484,7 +484,7 @@ describe("lightweight Bun package", () => {
         readFileSync(
           path.join(
             projectRoot,
-            ".burn-graph",
+            ".burn", "graph",
             "graphs",
             "installed-template-bugfix.json",
           ),
@@ -497,7 +497,7 @@ describe("lightweight Bun package", () => {
         readFileSync(
           path.join(
             projectRoot,
-            ".burn-graph",
+            ".burn", "graph",
             "graphs",
             "installed-template-vertical-slice.json",
           ),
@@ -580,7 +580,7 @@ describe("lightweight Bun package", () => {
       existsSync(
         path.join(
           projectRoot,
-          ".burn-graph",
+          ".burn", "graph",
           "graphs",
           "installed-template-invalid.json",
         ),

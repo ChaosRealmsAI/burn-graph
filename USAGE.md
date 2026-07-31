@@ -83,8 +83,15 @@ Help, version, successes, and failures share envelope schema version 1 and a
 maximum, the command still exits successfully and returns a bounded receipt
 with `responseOmitted`, a SHA-256 digest, and read-only recovery commands; it
 never reports the committed state change as a failure. Runtime state persists
-beneath `.burn-graph/`; GraphSpecs and CheckSpecs are tracked project facts,
+beneath `.burn/graph/`; GraphSpecs and CheckSpecs are tracked project facts,
 while SQLite and diagnostics remain ignored local runtime data.
+
+`.burn/` is the shared project state root of every Burn product, and
+`burn-graph init` creates `.burn/graph/` at the exact directory it is given,
+adding one `.burn/graph/runtime/` line to the project `.gitignore`. Commands
+find that root by walking parents and stop at `$HOME`. A pre-3.0 `.burn-graph/`
+without `.burn/graph/` fails with `LEGACY_STATE_ROOT` rather than migrating:
+re-run `init`, then re-apply the specifications kept there.
 
 The installed package also contains generated `help/`, `schema/`, and
 `examples/` assets. They mirror the exact CLI build and are optional: the CLI

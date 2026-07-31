@@ -7,5 +7,5 @@ test-results/
 playwright-report/
 apps/viewer/dist/
 apps/product-preview/dist/
-.burn-graph/runtime/
-**/.burn-graph/runtime/
+.burn/graph/runtime/
+**/.burn/graph/runtime/

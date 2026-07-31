@@ -823,7 +823,7 @@ describe("hierarchical Run convergence", () => {
 
   test("counts every recursive static descendant before dynamic attachment", () => {
     const root = createTestProject();
-    const configFile = path.join(root, ".burn-graph", "config.json");
+    const configFile = path.join(root, ".burn", "graph", "config.json");
     const config = JSON.parse(readFileSync(configFile, "utf8")) as {
       maxUnfinishedDescendants: number;
     };

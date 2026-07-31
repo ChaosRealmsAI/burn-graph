@@ -323,7 +323,7 @@ describe("package-internal graph rendering", () => {
       expect(missing.exitCode).toBe(1);
       expect(missing.envelope.error.code).toBe("RENDERER_UNAVAILABLE");
       expect(
-        statSync(path.join(root, ".burn-graph", "runtime", "renders")).isDirectory(),
+        statSync(path.join(root, ".burn", "graph", "runtime", "renders")).isDirectory(),
       ).toBe(true);
     },
     60_000,

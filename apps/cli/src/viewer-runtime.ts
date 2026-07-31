@@ -50,7 +50,7 @@ function requireName(value: string): string {
 }
 
 function runtimeRoot(projectRoot: string): string {
-  return path.join(projectRoot, ".burn-graph", "runtime", "viewers");
+  return path.join(projectRoot, ".burn", "graph", "runtime", "viewers");
 }
 
 function recordFile(projectRoot: string, name: string): string {

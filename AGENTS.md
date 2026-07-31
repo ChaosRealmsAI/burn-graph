@@ -91,7 +91,11 @@ project roots, and ports. Runtime scripts release only their recorded PID.
 - TypeScript is strict. Shared contracts exist only in `packages/core`.
 - Comments are English and explain only non-obvious invariants or safety
   boundaries.
-- Runtime writes stay beneath the discovered project's `.burn-graph/runtime`.
+- Project state lives at `<root>/.burn/graph`, discovered by walking parents to
+  the first `.burn/` and stopping at `$HOME`. A legacy `.burn-graph/` without it
+  is a `LEGACY_STATE_ROOT` failure, never a silent migration, and the legacy
+  root is never read or written.
+- Runtime writes stay beneath the discovered project's `.burn/graph/runtime`.
 - Rendering may stop only the exact isolated browser child it created; it must
   never attach to or terminate an existing user browser or terminal process.
 - Do not embed prompts, task results, credentials, or absolute user paths in

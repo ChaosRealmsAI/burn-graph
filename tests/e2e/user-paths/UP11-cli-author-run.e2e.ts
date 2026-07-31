@@ -620,7 +620,7 @@ try {
       const applied = invoke(["graph", "apply", "--input", "graph.json"]);
       assert(
         data(applied, "graph apply")["path"] ===
-          ".burn-graph/graphs/up11-decision.json",
+          ".burn/graph/graphs/up11-decision.json",
         "graph apply returned a non-project-relative path",
       );
       const start = invoke(["run", "start", "up11-decision"]);

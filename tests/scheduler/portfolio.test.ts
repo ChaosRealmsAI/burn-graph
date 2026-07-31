@@ -15,7 +15,7 @@ import {
 } from "../helpers/fixtures.ts";
 
 function constrainActorCapacity(root: string, maximum: number): void {
-  const file = path.join(root, ".burn-graph", "config.json");
+  const file = path.join(root, ".burn", "graph", "config.json");
   const config = JSON.parse(readFileSync(file, "utf8")) as Record<
     string,
     unknown

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   symlinkSync,
   writeFileSync,
@@ -315,7 +317,7 @@ describe("CLI-only authoring from progressive installed Help", () => {
     ).toBe("INPUT_TOO_LARGE");
 
     expect(
-      readdirSync(path.join(root, ".burn-graph", "graphs")),
+      readdirSync(path.join(root, ".burn", "graph", "graphs")),
     ).toEqual([]);
 
     const taskCount = 900;
@@ -366,7 +368,7 @@ describe("CLI-only authoring from progressive installed Help", () => {
     expect(largeValidation.data.documentBytes).toBeGreaterThan(256 * 1024);
     expect(largeValidation.data.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(
-      readdirSync(path.join(root, ".burn-graph", "graphs")),
+      readdirSync(path.join(root, ".burn", "graph", "graphs")),
     ).toEqual([]);
 
     await ok(
@@ -590,7 +592,7 @@ describe("CLI-only authoring from progressive installed Help", () => {
     );
     // The product's own path field for the same command stays project-relative.
     expect(applied.data.path).toBe(
-      ".burn-graph/graphs/path-shaped-user-text.json",
+      ".burn/graph/graphs/path-shaped-user-text.json",
     );
 
     const shown = await ok(root, ["graph", "show", "path-shaped-user-text"]);
@@ -657,7 +659,7 @@ describe("CLI-only authoring from progressive installed Help", () => {
     // A Viewer record is the one product field that is genuinely absolute before
     // the printer sees it, so it proves relativization is still applied where
     // P010 requires it. The recorded PID owns nothing, so nothing is started.
-    const viewers = path.join(root, ".burn-graph", "runtime", "viewers");
+    const viewers = path.join(root, ".burn", "graph", "runtime", "viewers");
     mkdirSync(viewers, { recursive: true, mode: 0o700 });
     writeFileSync(
       path.join(viewers, "default.json"),
@@ -679,7 +681,7 @@ describe("CLI-only authoring from progressive installed Help", () => {
     expect(status.data.running).toBe(false);
     expect(status.data.projectRoot).toBe(".");
     expect(status.data.logFile).toBe(
-      "./.burn-graph/runtime/viewers/default.log",
+      "./.burn/graph/runtime/viewers/default.log",
     );
 
     // The same private root must still be absent from an unrelated failure
@@ -690,5 +692,124 @@ describe("CLI-only authoring from progressive installed Help", () => {
     expect(notInitialized.error.code).toBe("NOT_INITIALIZED");
     expect(notInitialized.error.message).not.toContain(uninitialized);
     expect(notInitialized.error.message).not.toMatch(/(?:^|[\s"'(=])\/\w/);
+  });
+});
+
+describe("Unified .burn project state root", () => {
+  test("legacy .burn-graph fails with a stable error naming both roots", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    mkdirSync(path.join(root, ".burn-graph", "graphs"), { recursive: true });
+    writeFileSync(
+      path.join(root, ".burn-graph", "config.json"),
+      `${JSON.stringify({ schemaVersion: 1, projectId: "legacy" })}\n`,
+    );
+
+    const legacy = await fail(root, ["inspect", "overview"]);
+    expect(legacy.error.code).toBe("LEGACY_STATE_ROOT");
+    expect(legacy.error.message).toContain(".burn-graph");
+    expect(legacy.error.message).toContain(".burn/graph");
+    expect(legacy.error.message).toMatch(/not .*migrat/i);
+    expect(
+      legacy.recoveryActions.map((action: any) => action.command),
+    ).toContain("burn-graph init");
+
+    // doctor is the documented diagnosis surface, so it must answer with the
+    // same stable judgment rather than an unrelated failure.
+    const doctor = await fail(root, ["doctor"]);
+    expect(doctor.error.code).toBe("LEGACY_STATE_ROOT");
+  });
+
+  test("doctor flags a legacy leftover once the new root exists", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    await ok(root, ["init"]);
+
+    const clean = await ok(root, ["doctor"]);
+    expect(clean.data.legacyStateRoot).toBeUndefined();
+
+    mkdirSync(path.join(root, ".burn-graph", "graphs"), { recursive: true });
+    const flagged = await ok(root, ["doctor"]);
+    expect(flagged.data.legacyStateRoot).toBe(".burn-graph");
+    expect(
+      flagged.nextActions.some((action: any) =>
+        action.description.includes(".burn-graph")
+      ),
+    ).toBe(true);
+  });
+
+  test("init writes .burn/graph and one runtime ignore entry", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
+
+    await ok(root, ["init"]);
+
+    expect(existsSync(path.join(root, ".burn", "graph", "config.json"))).toBe(
+      true,
+    );
+    expect(existsSync(path.join(root, ".burn-graph"))).toBe(false);
+    const ignore = readFileSync(path.join(root, ".gitignore"), "utf8");
+    expect(ignore.startsWith("node_modules/\n")).toBe(true);
+    expect(
+      ignore.split("\n").filter((line) => line === ".burn/graph/runtime/"),
+    ).toHaveLength(1);
+
+    const applied = await ok(root, ["graph", "apply", "--input", "-"], JSON.stringify({
+      schemaVersion: 1,
+      id: "state-root",
+      title: "State root",
+      goal: "Prove the new state root carries authored specifications.",
+      revision: 1,
+      maxActive: 1,
+      nodes: [
+        {
+          id: "start",
+          type: "start",
+          title: "Start",
+          prompt: {
+            objective: "",
+            instructions: [],
+            mustRead: [],
+            doneWhen: [],
+            outputSchema: null,
+            role: "",
+            lockedContracts: [],
+            writablePaths: [],
+            forbidden: [],
+            runtime: [],
+          },
+          next: [{ to: "end" }],
+          maxAttempts: 3,
+          actorHint: null,
+          tags: [],
+        },
+        {
+          id: "end",
+          type: "end",
+          title: "End",
+          prompt: {
+            objective: "",
+            instructions: [],
+            mustRead: [],
+            doneWhen: [],
+            outputSchema: null,
+            role: "",
+            lockedContracts: [],
+            writablePaths: [],
+            forbidden: [],
+            runtime: [],
+          },
+          next: [],
+          maxAttempts: 3,
+          actorHint: null,
+          tags: [],
+        },
+      ],
+    }));
+    expect(applied.data.path).toBe(".burn/graph/graphs/state-root.json");
+    expect(
+      existsSync(path.join(root, ".burn", "graph", "graphs", "state-root.json")),
+    ).toBe(true);
   });
 });

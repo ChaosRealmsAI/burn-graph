@@ -4,8 +4,11 @@ import path from "node:path";
 
 import {
   BurnGraphError,
+  hasLegacyStateRoot,
   initializeProject,
+  LEGACY_STATE_DIRECTORY,
   MAX_COMPLETION_CONTEXT_BYTES,
+  STATE_DIRECTORY,
   type WorkSchedule,
 } from "@burn-graph/core";
 import {
@@ -271,9 +274,13 @@ program
           new Date(execution.leaseExpiresAt).getTime() <= Date.now(),
       ).length;
       const resourceLocks = service.listResourceLocks().length;
+      // A legacy directory beside the adopted root is never read, but it stays
+      // reportable: leftover state that nothing consumes is worth deleting.
+      const legacy = hasLegacyStateRoot(service.root);
       return {
         projectId: snapshot.projectId,
         root: ".",
+        ...(legacy ? { legacyStateRoot: LEGACY_STATE_DIRECTORY } : {}),
         config: service.config,
         graphCount: snapshot.graphs.length,
         runCount: snapshot.runs.length,
@@ -288,21 +295,35 @@ program
       };
     });
     success("doctor", data, {
-      nextActions: data.healthy
-        ? [
-            {
-              id: "overview",
-              command: "burn-graph inspect overview",
-              description: "Inspect current project progress.",
-            },
-          ]
-        : [
-            {
-              id: "reconcile",
-              command: "burn-graph recover reconcile",
-              description: "Reopen expired Assignments.",
-            },
-          ],
+      nextActions: [
+        ...("legacyStateRoot" in data
+          ? [
+              {
+                id: "legacy-state",
+                command: "burn-graph help errors",
+                description:
+                  `Re-register ${LEGACY_STATE_DIRECTORY}/graphs and ` +
+                  `${LEGACY_STATE_DIRECTORY}/checks into ${STATE_DIRECTORY}/, ` +
+                  `then delete ${LEGACY_STATE_DIRECTORY}/.`,
+              },
+            ]
+          : []),
+        ...(data.healthy
+          ? [
+              {
+                id: "overview",
+                command: "burn-graph inspect overview",
+                description: "Inspect current project progress.",
+              },
+            ]
+          : [
+              {
+                id: "reconcile",
+                command: "burn-graph recover reconcile",
+                description: "Reopen expired Assignments.",
+              },
+            ]),
+      ],
     });
   });
 
@@ -542,7 +563,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
   },
   "graph-spec": {
     title: "GraphSpec authoring contract",
-    source: ".burn-graph/graphs/<graph-id>.json",
+    source: ".burn/graph/graphs/<graph-id>.json",
     nodeTypes: [
       "start",
       "task",
@@ -622,7 +643,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     default: "burn-graph render <run-or-graph>",
     scopes: ["run", "tree"],
     formats: ["svg", "png"],
-    storage: ".burn-graph/runtime/renders/",
+    storage: ".burn/graph/runtime/renders/",
     invariants: [
       "The returned path is relative to the project root.",
       "Rendering never changes Run revision or events.",
@@ -945,6 +966,28 @@ function recoveryActions(error: BurnGraphError): readonly NextAction[] {
         id: "init",
         command: "burn-graph init",
         description: "Initialize this project before other commands.",
+      },
+    ];
+  }
+  if (error.code === "LEGACY_STATE_ROOT") {
+    return [
+      {
+        id: "init",
+        command: "burn-graph init",
+        description:
+          `Create ${STATE_DIRECTORY}/, then re-apply the specifications kept in ` +
+          `${LEGACY_STATE_DIRECTORY}/graphs and ${LEGACY_STATE_DIRECTORY}/checks.`,
+      },
+    ];
+  }
+  if (error.code === "UNSAFE_PROJECT_FILE") {
+    return [
+      {
+        id: "gitignore",
+        command: "burn-graph help errors",
+        description:
+          "Replace the symlinked .gitignore with a regular file, or add the " +
+          "runtime ignore entry by hand.",
       },
     ];
   }

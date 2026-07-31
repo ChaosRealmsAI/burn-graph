@@ -163,7 +163,7 @@ function commitThenFail(
 ): never {
   const file = path.join(
     root,
-    ".burn-graph",
+    ".burn", "graph",
     "runtime",
     "state.sqlite",
   );

@@ -60,7 +60,7 @@
           "../privacy/pocs/P02-flat-dogfood-baseline/poc.md"
         ],
         "writablePaths": [
-          ".burn-graph/runtime/artifacts"
+          ".burn/graph/runtime/artifacts"
         ],
         "forbidden": [
           "Do not weaken or replace the Check.",

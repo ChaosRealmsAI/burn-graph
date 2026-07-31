@@ -113,7 +113,7 @@ describe("render artifact boundaries", () => {
       const png = cacheIdentity({ ...input, format: "png" });
       expect(svg.key).toBe(repeated.key);
       expect(svg.key).not.toBe(png.key);
-      expect(svg.artifact.startsWith(".burn-graph/runtime/renders/")).toBe(
+      expect(svg.artifact.startsWith(".burn/graph/runtime/renders/")).toBe(
         true,
       );
       expect(svg.artifact).not.toContain(root);
@@ -127,7 +127,7 @@ describe("render artifact boundaries", () => {
     try {
       initializeProject(root, "2026-07-29T00:00:00.000Z");
       expect(
-        existsSync(path.join(root, ".burn-graph", "runtime", "renders")),
+        existsSync(path.join(root, ".burn", "graph", "runtime", "renders")),
       ).toBe(true);
       expect(discoverRenderBrowser(path.join(root, "missing-chrome"))).toBeNull();
 
@@ -165,7 +165,7 @@ describe("render artifact boundaries", () => {
       }
       const renderRoot = path.join(
         root,
-        ".burn-graph",
+        ".burn", "graph",
         "runtime",
         "renders",
       );

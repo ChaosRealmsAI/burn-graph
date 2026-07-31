@@ -61,7 +61,7 @@ function graphReceipt(
     maxActive: spec.maxActive,
     nodeCount: spec.nodes.length,
     ...documentDigest(spec),
-    ...(registered ? { path: `.burn-graph/graphs/${spec.id}.json` } : {}),
+    ...(registered ? { path: `.burn/graph/graphs/${spec.id}.json` } : {}),
   };
 }
 
@@ -78,7 +78,7 @@ function checkReceipt(
     argvCount: spec.argv.length,
     timeoutMs: spec.timeoutMs,
     ...documentDigest(spec),
-    ...(registered ? { path: `.burn-graph/checks/${spec.id}.json` } : {}),
+    ...(registered ? { path: `.burn/graph/checks/${spec.id}.json` } : {}),
   };
 }
 

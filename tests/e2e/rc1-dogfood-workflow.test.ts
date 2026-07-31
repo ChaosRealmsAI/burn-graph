@@ -579,7 +579,7 @@ describe("installed rc.1 dogfood workflow", () => {
       ownerId: secondResource.assignmentId,
     });
 
-    const configFile = path.join(projectRoot, ".burn-graph", "config.json");
+    const configFile = path.join(projectRoot, ".burn", "graph", "config.json");
     const config = JSON.parse(readFileSync(configFile, "utf8"));
     writeFileSync(
       configFile,

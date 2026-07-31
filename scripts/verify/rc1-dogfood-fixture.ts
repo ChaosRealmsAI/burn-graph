@@ -13,7 +13,7 @@ import path from "node:path";
 
 const artifactFile = path.resolve(
   process.cwd(),
-  ".burn-graph",
+  ".burn", "graph",
   "runtime",
   "artifacts",
   "rc1-known-bad.json",

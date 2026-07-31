@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import packageMetadata from "../../package.json";
@@ -24,6 +30,34 @@ const candidateArchive = path.join(
   `burn-graph-${packageMetadata.version}.tgz`,
 );
 const roots: string[] = [];
+// The legacy fixture's size is derived, never restated: the run count drives
+// the loop and every expected total is summed from what dev.4 actually wrote.
+const LEGACY_RUN_COUNT = 9;
+
+// Proof that nothing was read or written through the legacy root: SQLite would
+// rewrite its WAL on any open, so the digest covers every byte and name.
+function treeDigest(root: string): string {
+  const hash = createHash("sha256");
+  const walk = (directory: string, prefix: string): void => {
+    const entries = readdirSync(directory, { withFileTypes: true }).sort(
+      (left, right) => left.name.localeCompare(right.name),
+    );
+    for (const entry of entries) {
+      const full = path.join(directory, entry.name);
+      const relative = `${prefix}${entry.name}`;
+      if (entry.isDirectory()) {
+        hash.update(`D ${relative}\n`);
+        walk(full, `${relative}/`);
+        continue;
+      }
+      hash.update(`F ${relative} `);
+      hash.update(readFileSync(full));
+      hash.update("\n");
+    }
+  };
+  walk(root, "");
+  return hash.digest("hex");
+}
 
 async function extractArchive(archive: string): Promise<string> {
   const root = createTestDirectory();
@@ -77,12 +111,32 @@ async function invoke(
   return envelope;
 }
 
+async function invokeFailure(
+  executable: string,
+  root: string,
+  args: readonly string[],
+): Promise<any> {
+  const child = Bun.spawn(
+    ["bun", executable, "--root", root, ...confinedInputArgs(root, args)],
+    { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  );
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  expect(exitCode, stdout).toBe(1);
+  const envelope = JSON.parse(stderr);
+  expect(envelope).toMatchObject({ schemaVersion: 1, ok: false });
+  return envelope;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) removeTestProject(root);
 });
 
-describe(`installed dev.4 to ${packageMetadata.version} migration`, () => {
-  test("preserves nine Runs and ninety public events through the release archive", async () => {
+describe(`installed dev.4 state under ${packageMetadata.version}`, () => {
+  test("refuses the legacy root untouched and only re-registers specifications", async () => {
     expect(existsSync(dev4Archive)).toBe(true);
     expect(existsSync(candidateArchive)).toBe(true);
     const dev4 = await extractArchive(dev4Archive);
@@ -119,9 +173,8 @@ describe(`installed dev.4 to ${packageMetadata.version} migration`, () => {
       graphFile,
     ]);
 
-    const beforeRuns: any[] = [];
-    const beforeAttempts: any[] = [];
-    for (let index = 1; index <= 9; index += 1) {
+    let legacyEventCount = 0;
+    for (let index = 1; index <= LEGACY_RUN_COUNT; index += 1) {
       const runId = `legacy-migration:run:${index}`;
       const started = await invoke(dev4, projectRoot, [
         "run",
@@ -177,21 +230,9 @@ describe(`installed dev.4 to ${packageMetadata.version} migration`, () => {
       ]);
       expect(snapshot.data.summary.status).toBe("completed");
       expect(snapshot.data.events).toHaveLength(10);
-      beforeRuns.push(snapshot.data);
-      beforeAttempts.push(
-        (
-          await invoke(dev4, projectRoot, [
-            "inspect",
-            "node",
-            runId,
-            "left",
-            "--events",
-            "100",
-          ])
-        ).data.attempts,
-      );
+      legacyEventCount += snapshot.data.events.length;
     }
-    const beforeEvents = (
+    const legacyEvents = (
       await invoke(dev4, projectRoot, [
         "inspect",
         "events",
@@ -199,80 +240,55 @@ describe(`installed dev.4 to ${packageMetadata.version} migration`, () => {
         "1000",
       ])
     ).data;
-    expect(beforeEvents).toHaveLength(90);
-    const graphBytes = readFileSync(
-      path.join(
-        projectRoot,
-        ".burn-graph",
-        "graphs",
-        "legacy-migration.json",
-      ),
-      "utf8",
-    );
+    expect(legacyEvents).toHaveLength(legacyEventCount);
+    const legacyState = path.join(projectRoot, ".burn-graph");
+    expect(existsSync(path.join(legacyState, "config.json"))).toBe(true);
+    const untouched = treeDigest(legacyState);
 
-    const migratedEvents = (
-      await invoke(candidate, projectRoot, [
-        "inspect",
-        "events",
-        "--limit",
-        "1000",
-      ])
-    ).data;
-    expect(migratedEvents).toEqual(beforeEvents);
-    expect(
-      readFileSync(
-        path.join(
-          projectRoot,
-          ".burn-graph",
-          "graphs",
-          "legacy-migration.json",
-        ),
-        "utf8",
-      ),
-    ).toBe(graphBytes);
-
-    for (let index = 1; index <= 9; index += 1) {
-      const runId = `legacy-migration:run:${index}`;
-      const migrated = (
-        await invoke(candidate, projectRoot, [
-          "inspect",
-          "run",
-          runId,
-          "--events",
-          "100",
-        ])
-      ).data;
-      const before = beforeRuns[index - 1]!;
-      expect(migrated.summary).toMatchObject({
-        runId: before.summary.runId,
-        graphId: before.summary.graphId,
-        specRevision: before.summary.specRevision,
-        runtimeRevision: before.summary.runtimeRevision,
-        status: before.summary.status,
-        counts: before.summary.counts,
-        parentRunId: null,
-        parentNodeId: null,
-        rootRunId: runId,
-        depth: 0,
-        priority: "normal",
-        createdAt: before.summary.createdAt,
-        updatedAt: before.summary.updatedAt,
-      });
-      expect(migrated.nodes).toEqual(before.nodes);
-      expect(migrated.edges).toEqual(before.edges);
-      expect(migrated.events).toEqual(before.events);
-      expect(
-        (
-          await invoke(candidate, projectRoot, [
-            "inspect",
-            "node",
-            runId,
-            "left",
-            "--events",
-            "100",
-          ])
-        ).data.attempts,
-      ).toEqual(beforeAttempts[index - 1]);
+    // The 3.0 break: the candidate never adopts, reads, or repairs dev.4 state.
+    for (const args of [["inspect", "overview"], ["inspect", "events"], ["doctor"], ["next", "--actor", "legacy-actor"]]) {
+      const refused = await invokeFailure(candidate, projectRoot, args);
+      expect(refused.error.code).toBe("LEGACY_STATE_ROOT");
+      expect(refused.error.message).toContain(".burn-graph");
+      expect(refused.error.message).toContain(".burn/graph");
+      expect(refused.recoveryActions.map((action: any) => action.command)).toContain(
+        "burn-graph init",
+      );
     }
-  }, 90_000);
+    expect(treeDigest(legacyState)).toBe(untouched);
+
+    // The documented remediation, executed exactly as the error states it.
+    await invoke(candidate, projectRoot, ["init"]);
+    expect(
+      existsSync(path.join(projectRoot, ".burn", "graph", "config.json")),
+    ).toBe(true);
+    expect(
+      readFileSync(path.join(projectRoot, ".gitignore"), "utf8")
+        .split("\n")
+        .filter((line) => line === ".burn/graph/runtime/"),
+    ).toHaveLength(1);
+    expect(treeDigest(legacyState)).toBe(untouched);
+
+    const reapplied = await invoke(candidate, projectRoot, [
+      "graph",
+      "apply",
+      "--input",
+      path.join(".burn-graph", "graphs", "legacy-migration.json"),
+    ]);
+    expect(reapplied.data.path).toBe(".burn/graph/graphs/legacy-migration.json");
+    const overview = await invoke(candidate, projectRoot, ["inspect", "overview"]);
+    expect(overview.data.totals.graphs).toBe(1);
+    // Run history stays behind with the legacy root; only specifications carry
+    // across, which is what the error message promises and nothing more.
+    expect(overview.data.runs).toHaveLength(0);
+    const doctor = await invoke(candidate, projectRoot, ["doctor"]);
+    expect(doctor.data.graphCount).toBe(1);
+    expect(doctor.data.runCount).toBe(0);
+    expect(doctor.data.legacyStateRoot).toBe(".burn-graph");
+    expect(
+      (await invoke(candidate, projectRoot, ["inspect", "events", "--limit", "1000"]))
+        .data,
+    ).toHaveLength(0);
+    expect(treeDigest(legacyState)).toBe(untouched);
+  }, 120_000);
 });

@@ -124,7 +124,7 @@ describe("GraphSpec v2 validation", () => {
       ...prompt("Return the immutable child set."),
       role: "Planner",
       lockedContracts: ["../privacy/architecture.md"],
-      writablePaths: [".burn-graph/graphs"],
+      writablePaths: [".burn/graph/graphs"],
       forbidden: ["Do not launch an AI process."],
       runtime: ["burn-graph graph validate --input <file>"],
     };
