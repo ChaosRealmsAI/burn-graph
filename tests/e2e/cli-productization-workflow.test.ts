@@ -118,16 +118,12 @@ describe("CLI-only authoring from progressive installed Help", () => {
     const rootHelp = await ok(root, ["--help"]);
     expect(rootHelp.data.commands.map((command: any) => command.name)).toEqual([
       "init",
-      "template",
-      "run",
-      "next",
-      "current",
-      "done",
+      "goal",
+      "graph",
+      "work",
       "inspect",
       "help",
     ]);
-    expect(rootHelp.data.commands.map((command: any) => command.name)).not
-      .toContain("graph");
     expect(rootHelp.data.topics.map((topic: any) => topic.name)).toContain(
       "authoring",
     );
@@ -140,11 +136,11 @@ describe("CLI-only authoring from progressive installed Help", () => {
     const authoring = await ok(root, ["help", "authoring"]);
     expect(authoring.data.content.schema).toBe("burn-graph graph schema");
     const schema = await ok(root, ["graph", "schema"]);
-    expect(schema.data.acceptedGraphSpecVersions).toEqual([1, 2]);
-    expect(schema.data.jsonSchema.oneOf).toHaveLength(2);
+    expect(schema.data.acceptedGraphSpecVersions).toEqual([1, 2, 3]);
+    expect(schema.data.jsonSchema.oneOf).toHaveLength(3);
 
     for (
-      const kind of ["flat", "decision", "hierarchy", "gate", "wait"]
+      const kind of ["flat", "decision", "goal", "hierarchy", "gate", "wait"]
     ) {
       const example = await ok(root, ["graph", "example", kind]);
       const relativeFile = `example-${kind}.json`;

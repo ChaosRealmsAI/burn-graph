@@ -93,7 +93,7 @@ export function registerAuthoring(): void {
         nextActions: [
           {
             id: "example",
-            command: "burn-graph graph example decision",
+            command: "burn-graph graph example goal",
             description: "Inspect one complete valid GraphSpec.",
           },
         ],
@@ -154,7 +154,10 @@ export function registerAuthoring(): void {
         nextActions: [
           {
             id: "start-run",
-            command: `burn-graph run start ${spec.id}`,
+            command:
+              spec.schemaVersion === 3
+                ? `burn-graph goal start ${spec.id}`
+                : `burn-graph run start ${spec.id}`,
             description: "Start the Graph and receive its first Assignments.",
           },
         ],
@@ -190,7 +193,10 @@ export function registerAuthoring(): void {
         nextActions: [
           {
             id: "start-run",
-            command: `burn-graph run start ${spec.id}`,
+            command:
+              spec.schemaVersion === 3
+                ? `burn-graph goal start ${spec.id}`
+                : `burn-graph run start ${spec.id}`,
             description: "Start the cloned Graph.",
           },
         ],

@@ -23,6 +23,12 @@ export interface GraphEdgeRef {
   readonly maxTraversals: number | null;
 }
 
+export interface GraphValidationOptions {
+  // Persisted revisions may predate a stricter admission rule. New writes stay
+  // strict, while this narrow read compatibility keeps existing Runs operable.
+  readonly allowLegacyDormantLoopTarget?: boolean;
+}
+
 function edgeRef(
   node: NodeSpec,
   edge: NextEdgeSpec,
@@ -91,12 +97,20 @@ function topologicalCycle(
   return null;
 }
 
-export function validateGraphSpec(input: unknown): ValidatedGraph {
+export function validateGraphSpec(
+  input: unknown,
+  options: GraphValidationOptions = {},
+): ValidatedGraph {
   const parsed = GraphSpecSchema.safeParse(input);
   if (!parsed.success) {
-    throw new BurnGraphError("INVALID_GRAPH", "GraphSpec validation failed", false, {
-      issues: parsed.error.issues,
-    });
+    throw new BurnGraphError(
+      "INVALID_GRAPH",
+      "GraphSpec validation failed",
+      false,
+      {
+        issues: parsed.error.issues,
+      },
+    );
   }
   const spec = parsed.data;
 
@@ -118,7 +132,8 @@ export function validateGraphSpec(input: unknown): ValidatedGraph {
         node.prompt.lockedContracts.length > 0 ||
         node.prompt.writablePaths.length > 0 ||
         node.prompt.forbidden.length > 0 ||
-        node.prompt.runtime.length > 0,
+        node.prompt.runtime.length > 0 ||
+        node.work !== undefined,
     );
     if (extended) {
       throw new BurnGraphError(
@@ -129,11 +144,22 @@ export function validateGraphSpec(input: unknown): ValidatedGraph {
       );
     }
   }
+  if (
+    spec.schemaVersion === 2 &&
+    spec.nodes.some((node) => node.work !== undefined)
+  ) {
+    throw new BurnGraphError(
+      "INVALID_GRAPH",
+      "GraphSpec v2 cannot declare v3 Work contracts",
+    );
+  }
 
   for (const node of spec.nodes) {
     if (node.type === "subgraph") {
       const childCount =
-        node.mode === "static" ? (node.children?.length ?? 0) : node.maxChildren;
+        node.mode === "static"
+          ? (node.children?.length ?? 0)
+          : node.maxChildren;
       if (childCount !== undefined && childCount > 32) {
         throw new BurnGraphError(
           "HIERARCHY_LIMIT",
@@ -175,11 +201,7 @@ export function validateGraphSpec(input: unknown): ValidatedGraph {
       }
     } else if (node.type === "gate") {
       const routes = new Set(node.next.map((edge) => edge.route));
-      if (
-        routes.size !== 2 ||
-        !routes.has("pass") ||
-        !routes.has("fail")
-      ) {
+      if (routes.size !== 2 || !routes.has("pass") || !routes.has("fail")) {
         throw new BurnGraphError(
           "INVALID_ROUTE",
           `Gate ${node.id} requires exact pass and fail routes`,
@@ -216,6 +238,147 @@ export function validateGraphSpec(input: unknown): ValidatedGraph {
       );
     }
     nodesById.set(node.id, node);
+  }
+
+  let finalGoalReviewId: string | null = null;
+  if (spec.schemaVersion === 3) {
+    const evidenceIds = new Set(
+      spec.goal.successEvidence.map((evidence) => evidence.id),
+    );
+    const executionOwners = new Map<string, string>();
+    const reviewNodes: NodeSpec[] = [];
+
+    for (const node of spec.nodes) {
+      const assignable =
+        node.type === "task" ||
+        node.type === "decision" ||
+        (node.type === "subgraph" && node.mode === "dynamic");
+      if (assignable && node.work === undefined) {
+        throw new BurnGraphError(
+          "INVALID_GRAPH",
+          `GraphSpec v3 assignable node ${node.id} requires a Work contract`,
+          false,
+          { nodeId: node.id },
+        );
+      }
+      if (!assignable && node.work !== undefined) {
+        throw new BurnGraphError(
+          "INVALID_GRAPH",
+          `Non-assignable node ${node.id} cannot declare a Work contract`,
+          false,
+          { nodeId: node.id },
+        );
+      }
+      if (node.work === undefined) continue;
+      const unknownEvidence = node.work.evidence.filter(
+        (evidenceId) => !evidenceIds.has(evidenceId),
+      );
+      if (unknownEvidence.length > 0) {
+        throw new BurnGraphError(
+          "INVALID_GRAPH",
+          `Work ${node.id} references unknown Goal evidence`,
+          false,
+          { nodeId: node.id, evidenceIds: unknownEvidence },
+        );
+      }
+      if (node.work.kind === "execute") {
+        for (const evidenceId of node.work.evidence) {
+          const existingOwner = executionOwners.get(evidenceId);
+          if (existingOwner !== undefined) {
+            throw new BurnGraphError(
+              "INVALID_GRAPH",
+              `Goal evidence ${evidenceId} has more than one execution Work owner`,
+              false,
+              { evidenceId, ownerWorkIds: [existingOwner, node.id] },
+            );
+          }
+          executionOwners.set(evidenceId, node.id);
+        }
+        continue;
+      }
+      if (node.type !== "decision") {
+        throw new BurnGraphError(
+          "INVALID_GRAPH",
+          `Review Work ${node.id} must be a Decision`,
+          false,
+          { nodeId: node.id },
+        );
+      }
+      const routes = new Set(node.next.map((edge) => edge.route));
+      const revise = node.next.find((edge) => edge.route === "revise");
+      if (
+        routes.size !== 2 ||
+        !routes.has("pass") ||
+        revise === undefined ||
+        revise.maxTraversals === undefined
+      ) {
+        throw new BurnGraphError(
+          "INVALID_ROUTE",
+          `Review Work ${node.id} requires exact pass and bounded revise routes`,
+          false,
+          { nodeId: node.id, routes: ["pass", "revise"] },
+        );
+      }
+      reviewNodes.push(node);
+    }
+
+    for (const review of reviewNodes) {
+      const reviewed = review.work!.reviewOf.map((nodeId) => {
+        const node = nodesById.get(nodeId);
+        if (!node || node.work?.kind !== "execute") {
+          throw new BurnGraphError(
+            "INVALID_GRAPH",
+            `Review Work ${review.id} references non-execution Work ${nodeId}`,
+            false,
+            { nodeId: review.id, reviewOf: nodeId },
+          );
+        }
+        return node;
+      });
+      const reviewedEvidence = new Set(
+        reviewed.flatMap((node) => node.work?.evidence ?? []),
+      );
+      const unsupported = review.work!.evidence.filter(
+        (evidenceId) => !reviewedEvidence.has(evidenceId),
+      );
+      if (unsupported.length > 0) {
+        throw new BurnGraphError(
+          "INVALID_GRAPH",
+          `Review Work ${review.id} covers evidence its reviewed Work does not own`,
+          false,
+          { nodeId: review.id, evidenceIds: unsupported },
+        );
+      }
+    }
+
+    const unowned = [...evidenceIds].filter(
+      (evidenceId) => !executionOwners.has(evidenceId),
+    );
+    if (unowned.length > 0) {
+      throw new BurnGraphError(
+        "INVALID_GRAPH",
+        "Every Goal evidence requirement needs execution Work ownership",
+        false,
+        { evidenceIds: unowned },
+      );
+    }
+    const finalReviews = reviewNodes.filter((node) =>
+      [...evidenceIds].every((evidenceId) =>
+        node.work?.evidence.includes(evidenceId),
+      ),
+    );
+    if (finalReviews.length !== 1) {
+      throw new BurnGraphError(
+        "INVALID_GRAPH",
+        "GraphSpec v3 requires exactly one final Review Work covering every Goal evidence requirement",
+        false,
+        {
+          evidenceIds: [...evidenceIds],
+          reviewNodes: finalReviews.map((node) => node.id),
+        },
+      );
+    }
+    finalGoalReviewId = finalReviews[0]!.id;
   }
 
   const starts = spec.nodes.filter((node) => node.type === "start");
@@ -283,6 +446,9 @@ export function validateGraphSpec(input: unknown): ValidatedGraph {
     reverseAdjacency.set(edge.to, previous);
   }
 
+  const startId = starts[0]!.id;
+  const endId = ends[0]!.id;
+  const initiallyReachable = reachable(startId, forwardAdjacency);
   for (const edge of loopEdges) {
     const source = nodesById.get(edge.from)!;
     const target = nodesById.get(edge.to)!;
@@ -298,15 +464,43 @@ export function validateGraphSpec(input: unknown): ValidatedGraph {
         `Loop target ${edge.to} is not a forward ancestor of ${edge.from}`,
       );
     }
+    if (
+      !initiallyReachable.has(edge.to) &&
+      options.allowLegacyDormantLoopTarget !== true
+    ) {
+      throw new BurnGraphError(
+        "INVALID_LOOP",
+        `Loop target ${edge.to} is not reachable from Start before the loop opens`,
+        false,
+        { sourceId: edge.from, targetId: edge.to },
+      );
+    }
   }
 
-  const startId = starts[0]!.id;
-  const endId = ends[0]!.id;
   const allAdjacency = new Map<string, string[]>();
   for (const edge of allEdges) {
     const next = allAdjacency.get(edge.from) ?? [];
     next.push(edge.to);
     allAdjacency.set(edge.from, next);
+  }
+  if (finalGoalReviewId !== null) {
+    const withoutFinalReview = new Map<string, string[]>();
+    for (const edge of allEdges) {
+      if (edge.from === finalGoalReviewId || edge.to === finalGoalReviewId) {
+        continue;
+      }
+      const next = withoutFinalReview.get(edge.from) ?? [];
+      next.push(edge.to);
+      withoutFinalReview.set(edge.from, next);
+    }
+    if (reachable(starts[0]!.id, withoutFinalReview).has(ends[0]!.id)) {
+      throw new BurnGraphError(
+        "INVALID_GRAPH",
+        `Goal completion can bypass final Review Work ${finalGoalReviewId}`,
+        false,
+        { nodeId: finalGoalReviewId },
+      );
+    }
   }
   const fromStart = reachable(startId, allAdjacency);
   const canReachEnd = reachable(endId, reverseAdjacency);

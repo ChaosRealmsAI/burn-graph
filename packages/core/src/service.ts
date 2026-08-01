@@ -21,6 +21,7 @@ import {
   type GraphSpec,
   type GraphSummary,
   type GraphTreeSnapshot,
+  type GoalSnapshot,
   type IdempotentMutationResult,
   type MutationResult,
   type PortfolioOverview,
@@ -70,13 +71,11 @@ import {
   orderReadyWork,
 } from "./scheduler.ts";
 import { BurnGraphDatabase } from "./storage.ts";
+import { GoalRuntime } from "./goal-runtime.ts";
 import {
   recoverTemplateTransactions,
 } from "./template-service.ts";
-import {
-  validateGraphSpec,
-  type ValidatedGraph,
-} from "./validator.ts";
+import { type ValidatedGraph } from "./validator.ts";
 
 const MAX_SCHEDULE_READY_PREVIEW = 32;
 const MAX_SCHEDULE_RUN_SUMMARIES = 8;
@@ -178,6 +177,16 @@ export class BurnGraphServiceBase {
       authoring: this.authoring,
       getSnapshot: (reference, eventLimit) => this.getSnapshot(reference, eventLimit),
       readSnapshot: (reference, eventLimit) => this.readSnapshot(reference, eventLimit),
+      goalSnapshot: (runId) => this.goalRuntime.snapshot(runId),
+    });
+    this.goalRuntime = new GoalRuntime({
+      database: this.database,
+      timestamp: () => this.internals.timestamp(),
+      resolveRun: (reference) => this.internals.resolveRun(reference),
+      graphForRun: (runId) => this.internals.graphForRun(runId),
+      bumpRun: (runId, at) => this.internals.bumpRun(runId, at),
+      appendEvent: (entry) => this.internals.appendEvent(entry),
+      getEvent: (sequence) => this.internals.getEvent(sequence),
     });
     this.lifecycle = new RunLifecycle({
       database: this.database,
@@ -206,6 +215,7 @@ export class BurnGraphServiceBase {
   private readonly projection: RunProjection;
   private readonly lifecycle: RunLifecycle;
   protected readonly internals: RuntimeInternals;
+  private readonly goalRuntime: GoalRuntime;
 
   validateGraph(input: unknown): GraphSpec {
     return this.authoring.validateGraph(input);
@@ -233,6 +243,38 @@ export class BurnGraphServiceBase {
 
   getGraph(graphId: string): GraphSpec {
     return this.authoring.getGraph(graphId);
+  }
+
+  getGoal(reference: string): GoalSnapshot | null {
+    return this.goalRuntime.get(reference);
+  }
+
+  proposeGoalAmendment(
+    reference: string,
+    actorId: string,
+    idempotencyKey: string,
+    input: unknown,
+  ) {
+    return this.goalRuntime.proposeAmendment(
+      reference,
+      actorId,
+      idempotencyKey,
+      input,
+    );
+  }
+
+  reviewGoalAmendment(
+    amendmentId: string,
+    actorId: string,
+    idempotencyKey: string,
+    input: unknown,
+  ) {
+    return this.goalRuntime.reviewAmendment(
+      amendmentId,
+      actorId,
+      idempotencyKey,
+      input,
+    );
   }
 
   validateCheck(input: unknown): CheckSpec {
@@ -442,12 +484,10 @@ export class BurnGraphServiceBase {
         `SELECT n.run_id, r.root_run_id, r.depth, root.priority,
                 root.scheduler_ready_at, r.graph_id, n.node_id,
                 n.node_type, n.title, n.attempt, n.updated_at,
-                s.document_json
+                r.spec_revision
            FROM node_runs n
            JOIN runs r ON r.run_id = n.run_id
            JOIN runs root ON root.run_id = r.root_run_id
-           JOIN graph_specs s
-             ON s.graph_id = r.graph_id AND s.revision = r.spec_revision
           WHERE r.status = 'running'
             AND n.status = 'ready'
             ${filter}
@@ -466,8 +506,9 @@ export class BurnGraphServiceBase {
       const runId = stringValue(row, "run_id");
       let graph = graphsByRun.get(runId);
       if (!graph) {
-        graph = validateGraphSpec(
-          JSON.parse(stringValue(row, "document_json")),
+        graph = this.internals.loadGraph(
+          stringValue(row, "graph_id"),
+          numberValue(row, "spec_revision"),
         );
         graphsByRun.set(runId, graph);
       }
@@ -520,11 +561,9 @@ export class BurnGraphServiceBase {
     );
     const gateRows = this.database.db
       .query(
-        `SELECT n.run_id, n.node_id, s.document_json
+        `SELECT n.run_id, n.node_id, r.graph_id, r.spec_revision
            FROM node_runs n
            JOIN runs r ON r.run_id = n.run_id
-           JOIN graph_specs s
-             ON s.graph_id = r.graph_id AND s.revision = r.spec_revision
           WHERE r.status = 'running'
             AND n.status = 'ready'
             AND n.node_type = 'gate'
@@ -536,8 +575,9 @@ export class BurnGraphServiceBase {
       const runId = stringValue(row, "run_id");
       let graph = graphsByRun.get(runId);
       if (!graph) {
-        graph = validateGraphSpec(
-          JSON.parse(stringValue(row, "document_json")),
+        graph = this.internals.loadGraph(
+          stringValue(row, "graph_id"),
+          numberValue(row, "spec_revision"),
         );
         graphsByRun.set(runId, graph);
       }
@@ -592,6 +632,12 @@ export class BurnGraphServiceBase {
           true,
         );
       }
+      this.goalRuntime.assertReviewClaimAllowed(
+        runId,
+        nodeId,
+        actorId,
+        validated.spec,
+      );
       const row = this.internals.nodeRow(runId, nodeId);
       let status = NodeStatusSchema.parse(stringValue(row, "status"));
       let recoveredExpiredAttempt: {
@@ -882,6 +928,7 @@ export class BurnGraphServiceBase {
   ): MutationResult<RuntimeNode> {
     const checkpoint = CheckpointInputSchema.parse(input);
     const runId = this.internals.resolveRun(reference);
+    const validated = this.internals.graphForRun(runId);
     const now = this.now();
     const at = now.toISOString();
     const sequence = this.database.immediate(() => {
@@ -891,6 +938,12 @@ export class BurnGraphServiceBase {
         actorId,
         now,
         expectation,
+      );
+      this.goalRuntime.validateCheckpoint(
+        runId,
+        nodeId,
+        checkpoint,
+        validated.spec,
       );
       const attempt = numberValue(row, "attempt");
       this.database.db
@@ -1003,6 +1056,13 @@ export class BurnGraphServiceBase {
         actorId,
         now,
         expectation,
+      );
+      this.goalRuntime.validateCompletion(
+        runId,
+        nodeId,
+        actorId,
+        completion,
+        validated.spec,
       );
       const attempt = numberValue(node, "attempt");
       const assignmentId = optionalString(node, "assignment_id");
@@ -1494,7 +1554,11 @@ export class BurnGraphServiceBase {
             if (
               error instanceof BurnGraphError &&
               error.retryable &&
-              ["NODE_NOT_READY", "RESOURCE_BUSY"].includes(error.code)
+              [
+                "NODE_NOT_READY",
+                "RESOURCE_BUSY",
+                "REVIEW_INDEPENDENCE_REQUIRED",
+              ].includes(error.code)
             ) {
               continue;
             }

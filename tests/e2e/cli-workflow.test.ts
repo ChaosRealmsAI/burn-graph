@@ -5,6 +5,7 @@ import path from "node:path";
 import packageMetadata from "../../package.json";
 import {
   createTestDirectory,
+  goalGraph,
   loopGraph,
   parallelGraph,
   removeTestProject,
@@ -98,6 +99,111 @@ afterEach(() => {
 });
 
 describe("converged public CLI", () => {
+  test("runs the installed Goal–Graph–Work path with independent Review", async () => {
+    const root = createTestDirectory();
+    roots.push(root);
+    await ok(root, ["init"]);
+    const graphFile = writeGraph(root, "goal-public", goalGraph("goal-public"));
+    const applied = await ok(root, ["graph", "apply", "--input", graphFile]);
+    expect(applied.nextActions[0].command).toBe(
+      "burn-graph goal start goal-public",
+    );
+
+    const started = await ok(root, [
+      "goal",
+      "start",
+      "goal-public",
+      "--actor",
+      "executor",
+      "--run-id",
+      "goal-public:run",
+    ]);
+    const execute = assignment(started, "goal-public", "work");
+    expect(execute.node.work).toEqual({
+      kind: "execute",
+      evidence: ["E1"],
+      reviewOf: [],
+    });
+    expect(execute.graph.goalState.progress.percent).toBe(0);
+
+    const executed = await ok(
+      root,
+      ["work", "done", "--assignment", execute.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "Produced one externally visible result.",
+        evidence: [],
+        record: {
+          facts: ["The result exists."],
+          decisions: [],
+          blockers: [],
+          artifacts: ["artifact://goal-public/result"],
+          next: "Independent Review",
+        },
+        evidenceClaims: [
+          {
+            evidenceId: "E1",
+            summary: "The artifact demonstrates the result.",
+            artifacts: ["artifact://goal-public/result"],
+          },
+        ],
+      }),
+    );
+    expect(executed.data.assignments).toHaveLength(0);
+    expect(executed.data.state).toBe("waiting");
+    const claimed = await ok(root, [
+      "work",
+      "next",
+      "--actor",
+      "reviewer",
+      "--graph",
+      "goal-public:run",
+    ]);
+    const review = assignment(claimed, "goal-public", "review");
+    expect(review.node.work.kind).toBe("review");
+
+    const passed = await ok(
+      root,
+      ["work", "done", "--assignment", review.assignmentId, "--input", "-"],
+      JSON.stringify({
+        summary: "The current artifact passed independent Review.",
+        evidence: [],
+        record: {
+          facts: ["The public artifact was inspected."],
+          decisions: [
+            {
+              summary: "Pass E1.",
+              reason: "The declared acceptance condition is observable.",
+            },
+          ],
+          blockers: [],
+          artifacts: ["artifact://goal-public/review"],
+          next: null,
+        },
+        evidenceClaims: [],
+        verdict: {
+          decision: "pass",
+          summary: "E1 is independently verified.",
+          evidence: ["E1"],
+          findings: [],
+        },
+        route: "pass",
+      }),
+    );
+    expect(passed.data.state).toBe("completed");
+    const shown = await ok(root, ["goal", "show", "goal-public:run"]);
+    expect(shown.data).toMatchObject({
+      runStatus: "completed",
+      goal: {
+        status: "satisfied",
+        progress: {
+          percent: 100,
+          evidence: { required: 1, claimed: 1, verified: 1 },
+        },
+        review: { status: "pass", reviewerActorId: "reviewer" },
+      },
+    });
+  });
+
   test("progressively discloses JSON Help and rejects removed commands", async () => {
     const root = createTestDirectory();
     roots.push(root);
@@ -108,17 +214,15 @@ describe("converged public CLI", () => {
       rootHelp.data.commands.map((command: any) => command.name),
     ).toEqual([
       "init",
-      "template",
-      "run",
-      "next",
-      "current",
-      "done",
+      "goal",
+      "graph",
+      "work",
       "inspect",
       "help",
     ]);
     expect(
       rootHelp.data.commands.map((command: any) => command.name),
-    ).not.toContain("work");
+    ).not.toContain("run");
     for (const command of rootHelp.data.commands) {
       const disclosed = await ok(root, [command.name, "--help"]);
       expect(["area", "command"]).toContain(disclosed.data.kind);
@@ -149,9 +253,9 @@ describe("converged public CLI", () => {
       "events",
     ]);
 
-    const commandHelp = await ok(root, ["done", "--help"]);
+    const commandHelp = await ok(root, ["work", "done", "--help"]);
     expect(commandHelp.data).toMatchObject({
-      topic: "done",
+      topic: "work.done",
       kind: "command",
       mutates: true,
     });
@@ -159,20 +263,19 @@ describe("converged public CLI", () => {
 
     const topicHelp = await ok(root, ["help", "ai-loop"]);
     expect(topicHelp.data.content.sequence).toContain(
-      "burn-graph done --assignment <id> --input -",
+      "burn-graph work done --assignment <id> --input -",
     );
     expect((await ok(root, ["help", "inspect"])).data.kind).toBe("topic");
     expect((await ok(root, ["help", "recover"])).data.kind).toBe("topic");
-    const missingDoneInput = await fail(root, ["done"]);
-    expect(missingDoneInput.command).toBe("done");
+    const missingDoneInput = await fail(root, ["work", "done"]);
+    expect(missingDoneInput.command).toBe("work.done");
     expect(missingDoneInput.recoveryActions[0].command).toBe(
-      "burn-graph done --help",
+      "burn-graph work done --help",
     );
     const version = await ok(root, ["--version"]);
     expect(version.data.version).toBe(packageMetadata.version);
 
     for (const removed of [
-      ["work", "--help"],
       ["events", "list"],
       ["mermaid", "anything"],
       ["serve"],
@@ -225,7 +328,7 @@ describe("converged public CLI", () => {
       claim: { actorId: "primary" },
     });
     expect(firstWork.returnProtocol.complete).toBe(
-      `burn-graph done --assignment ${firstWork.assignmentId} --input -`,
+      `burn-graph work done --assignment ${firstWork.assignmentId} --input -`,
     );
 
     const parallelStart = await ok(root, [

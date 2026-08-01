@@ -39,6 +39,7 @@ import { registerExecution } from "./commands-execution.ts";
 import { registerAuthoring } from "./commands-authoring.ts";
 import { registerInspect } from "./commands-inspect.ts";
 import { registerRecover } from "./commands-recover.ts";
+import { registerGoalWork } from "./commands-goal-work.ts";
 import { startViewerServer } from "./server.ts";
 import {
   startViewerInstance,
@@ -54,14 +55,12 @@ const VERSION = packageMetadata.version;
 
 // Root Help deliberately shows only the daily loop. Everything else stays
 // reachable through `help <topic>` and `--help`, so a source-blind AI meets
-// eight commands rather than forty on first contact.
+// six product-level commands rather than the compatibility surface on first contact.
 const ROOT_HELP_COMMANDS = [
   "init",
-  "template",
-  "run",
-  "next",
-  "current",
-  "done",
+  "goal",
+  "graph",
+  "work",
   "inspect",
   "help",
 ] as const;
@@ -110,6 +109,7 @@ program
 
 registerAuthoring();
 registerExecution(program);
+registerGoalWork();
 
 const signal = group("signal", "resolve durable external Wait outcomes");
 
@@ -329,6 +329,42 @@ program
 
 const helpDetails = new Map<string, HelpDetail>([
   ["init", { mutates: true, next: ["graph.apply"] }],
+  ["goal", { mutates: false }],
+  ["goal.start", { mutates: true, input: "registered GraphSpec v3" }],
+  ["goal.show", { mutates: false, output: "canonical GoalSnapshot" }],
+  ["goal.list", { mutates: false }],
+  [
+    "goal.amend",
+    {
+      mutates: true,
+      input: {
+        reason: "why new facts require changing the evidence contract",
+        changes: "1-64 add, update, or remove changes",
+        idempotencyKey: "required stable retry key",
+      },
+      errors: [
+        "INVALID_GOAL_AMENDMENT",
+        "GOAL_AMENDMENT_LIMIT",
+        "IDEMPOTENCY_CONFLICT",
+      ],
+    },
+  ],
+  [
+    "goal.review-amendment",
+    {
+      mutates: true,
+      input: {
+        verdict: "accept | reject",
+        summary: "independent judgment",
+        userApproved: "required true for update or remove",
+      },
+      errors: [
+        "REVIEW_INDEPENDENCE_REQUIRED",
+        "USER_APPROVAL_REQUIRED",
+        "GOAL_AMENDMENT_ALREADY_REVIEWED",
+      ],
+    },
+  ],
   ["graph", { mutates: false }],
   ["graph.schema", { mutates: false, next: ["graph.example"] }],
   ["graph.example", { mutates: false, next: ["graph.validate"] }],
@@ -337,6 +373,32 @@ const helpDetails = new Map<string, HelpDetail>([
   ["graph.list", { mutates: false }],
   ["graph.show", { mutates: false }],
   ["graph.clone", { mutates: true, next: ["run.start"] }],
+  ["work", { mutates: false }],
+  ["work.next", { mutates: true, output: "WorkSchedule with Work packets" }],
+  ["work.current", { mutates: false, output: "current Work packets" }],
+  [
+    "work.done",
+    {
+      mutates: true,
+      input: {
+        record: "facts, decisions with reasons, blockers, artifacts, and next",
+        evidenceClaims: "execution claims with external artifact references",
+        verdict: "independent Review pass or revise",
+      },
+      errors: [
+        "ASSIGNMENT_NOT_FOUND",
+        "ASSIGNMENT_NOT_ACTIVE",
+        "ASSIGNMENT_INPUT_CONFLICT",
+        "WORK_RECORD_REQUIRED",
+        "EVIDENCE_ARTIFACT_REQUIRED",
+        "REVIEW_INDEPENDENCE_REQUIRED",
+        "GOAL_EVIDENCE_UNVERIFIED",
+      ],
+    },
+  ],
+  ["work.checkpoint", { mutates: true, input: "structured Work record" }],
+  ["work.block", { mutates: true }],
+  ["work.fail", { mutates: true }],
   ["template", { mutates: false }],
   ["template.list", { mutates: false, next: ["template.show"] }],
   ["template.show", { mutates: false, next: ["template.instantiate"] }],
@@ -519,16 +581,34 @@ const helpDetails = new Map<string, HelpDetail>([
 ]);
 
 const helpTopics: Readonly<Record<string, unknown>> = {
+  "goal-work": {
+    title: "Evidence-reviewed Goal–Graph–Work loop",
+    sequence: [
+      "burn-graph graph example goal",
+      "burn-graph graph apply --input goal.json",
+      "burn-graph goal start <graph>",
+      "burn-graph work done --assignment <id> --input -",
+      "use a different Actor for Review Work",
+      "burn-graph goal show <run-or-graph>",
+    ],
+    invariants: [
+      "Goal evidence and its external Oracle are agreed before execution.",
+      "Execution claims evidence; only independent Review verifies it.",
+      "The headline percentage derives only from verified required evidence.",
+      "Evidence amendments are append-only, independently reviewed, and update/remove require user approval.",
+      "Decision routes, bounded revise loops, and dynamic Subgraphs keep the path flexible without rewriting history.",
+    ],
+  },
   authoring: {
     title: "Author a complete project-local Graph without source docs",
     sequence: [
-      "burn-graph graph example decision",
+      "burn-graph graph example goal",
       "save data.graph as graph.json inside the initialized project",
       "burn-graph graph validate --input graph.json",
       "burn-graph graph apply --input graph.json",
-      "burn-graph run start <graph>",
+      "burn-graph goal start <graph>",
       "execute each returned AssignmentPacket prompt",
-      "burn-graph done --assignment <id> --input -",
+      "burn-graph work done --assignment <id> --input -",
     ],
     schema: "burn-graph graph schema",
     examples: GRAPH_EXAMPLE_KINDS.map(
@@ -549,10 +629,10 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     title: "Guarded AI execution loop",
     sequence: [
       "burn-graph graph apply --input graph.json",
-      "burn-graph run start <graph>",
+      "burn-graph goal start <graph>",
       "execute every returned AssignmentPacket prompt",
-      "burn-graph done --assignment <id> --input -",
-      "repeat returned AssignmentPacket prompts until state is completed",
+      "burn-graph work done --assignment <id> --input -",
+      "repeat returned Work packets until verified Goal state is satisfied",
     ],
     invariants: [
       "The Runtime chooses Ready nodes and legal Next transitions.",
@@ -579,6 +659,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
       "all nodes reachable and convergent",
       "Task and Decision prompt objectives",
       "explicit bounded Decision back-edges",
+      "v3 Work ownership and an unavoidable independent final Review",
     ],
     commands: ["graph validate", "graph apply", "graph show"],
     executionAvailability: {
@@ -725,7 +806,7 @@ function commandPath(command: Command): readonly string[] {
 }
 
 // Root Help is an explicit list, not a filter over whatever happens to be
-// registered: adding an advanced command must not silently widen the eight
+// registered: adding an advanced command must not silently widen the six
 // commands a new caller is first shown. A missing name is a contract error
 // rather than a quietly shorter list.
 function rootHelpCommands(): readonly Command[] {
@@ -831,11 +912,11 @@ function helpPayload(
       ? {
           quickstart: [
             "burn-graph init",
-            "burn-graph template list",
-            "burn-graph template show vertical-slice",
-            "burn-graph help authoring",
-            "burn-graph run start <graph>",
-            "burn-graph done --assignment <id> --input -",
+            "burn-graph graph example goal",
+            "burn-graph graph apply --input goal.json",
+            "burn-graph goal start <graph>",
+            "burn-graph work done --assignment <id> --input -",
+            "burn-graph goal show <run-or-graph>",
           ],
           dailyLoop: ROOT_HELP_COMMANDS,
           topics: Object.keys(helpTopics).map((topic) => ({

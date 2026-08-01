@@ -231,7 +231,7 @@ export function scheduleActions(schedule: WorkSchedule): readonly NextAction[] {
         : [
             {
               id: "next",
-              command: `burn-graph next --actor ${schedule.actorId}`,
+              command: `burn-graph work next --actor ${schedule.actorId}`,
               description: "Resume existing work or fill newly available slots.",
             },
           ]),

@@ -51,11 +51,11 @@ describe("installed CLI authoring contract judges known-bad input red", () => {
 describe("installed CLI authoring contract", () => {
   test("returns one complete bounded GraphSpec schema", () => {
     const schema = graphSchemaDocument() as any;
-    expect(schema.acceptedGraphSpecVersions).toEqual([1, 2]);
+    expect(schema.acceptedGraphSpecVersions).toEqual([1, 2, 3]);
     expect(schema.jsonSchema.$schema).toBe(
       "https://json-schema.org/draft/2020-12/schema",
     );
-    expect(schema.jsonSchema.oneOf).toHaveLength(2);
+    expect(schema.jsonSchema.oneOf).toHaveLength(3);
     expect(schema.fieldGuide.prompt.runtime).toContain("GraphSpec v2");
     expect(schema.recovery.map((entry: any) => entry.error)).toEqual([
       "INVALID_JSON",
@@ -65,10 +65,11 @@ describe("installed CLI authoring contract", () => {
     expect(Buffer.byteLength(JSON.stringify(schema))).toBeLessThan(256 * 1024);
   });
 
-  test("keeps all five examples complete and accepted by the real validator", () => {
+  test("keeps all six examples complete and accepted by the real validator", () => {
     expect(GRAPH_EXAMPLE_KINDS).toEqual([
       "flat",
       "decision",
+      "goal",
       "hierarchy",
       "gate",
       "wait",

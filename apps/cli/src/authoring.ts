@@ -13,6 +13,7 @@ import { z } from "zod";
 export const GRAPH_EXAMPLE_KINDS = [
   "flat",
   "decision",
+  "goal",
   "hierarchy",
   "gate",
   "wait",
@@ -120,6 +121,82 @@ const examples: Readonly<Record<GraphExampleKind, GraphSpec>> = {
         maxAttempts: 3,
         actorHint: null,
         tags: ["repair"],
+      },
+      {
+        id: "end",
+        type: "end",
+        title: "Complete",
+        prompt: prompt(),
+        next: [],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+    ],
+  }),
+  goal: normalize({
+    schemaVersion: 3,
+    id: "example-goal",
+    title: "Evidence-reviewed Goal",
+    goal: {
+      objective: "Produce one observable result and prove it independently.",
+      boundaries: ["Do not treat an execution claim as verified progress."],
+      successEvidence: [
+        {
+          id: "E1",
+          description: "The requested result exists and is observable.",
+          acceptance: ["A stable external artifact demonstrates the result."],
+          oracle: "A different Actor inspects the artifact from its public entry.",
+        },
+      ],
+      review: {
+        required: true,
+        independentActor: true,
+        criteria: ["Judge the current artifact against every acceptance condition."],
+      },
+    },
+    revision: 1,
+    maxActive: 1,
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        title: "Start",
+        prompt: prompt(),
+        next: [{ to: "work" }],
+        maxAttempts: 1,
+        actorHint: null,
+        tags: [],
+      },
+      {
+        id: "work",
+        type: "task",
+        title: "Produce evidence",
+        prompt: prompt("Produce the result and record current external evidence."),
+        work: { kind: "execute", evidence: ["E1"], reviewOf: [] },
+        next: [{ to: "review" }],
+        maxAttempts: 3,
+        actorHint: null,
+        tags: ["work"],
+      },
+      {
+        id: "review",
+        type: "decision",
+        title: "Review evidence",
+        prompt: prompt("Independently pass current evidence or return concrete findings."),
+        work: { kind: "review", evidence: ["E1"], reviewOf: ["work"] },
+        next: [
+          { to: "end", route: "pass", label: "evidence verified" },
+          {
+            to: "work",
+            route: "revise",
+            label: "repair required",
+            maxTraversals: 2,
+          },
+        ],
+        maxAttempts: 3,
+        actorHint: null,
+        tags: ["review"],
       },
       {
         id: "end",
@@ -282,7 +359,7 @@ export function graphSchemaDocument(): Readonly<Record<string, unknown>> {
   return {
     schemaVersion: 1,
     document: "GraphSpec",
-    acceptedGraphSpecVersions: [1, 2],
+    acceptedGraphSpecVersions: [1, 2, 3],
     jsonSchema: {
       ...z.toJSONSchema(GraphSpecSchema, {
         target: "draft-2020-12",
@@ -295,10 +372,10 @@ export function graphSchemaDocument(): Readonly<Record<string, unknown>> {
     },
     fieldGuide: {
       graph: {
-        schemaVersion: "1 for basic graphs; 2 for Subgraph, Gate, Wait, resources, or extended prompts.",
+        schemaVersion: "1 for basic graphs; 2 for system nodes; 3 for evidence-reviewed Goal–Graph–Work.",
         id: "Stable identifier: 1-128 letters, numbers, dot, underscore, colon, or hyphen; starts with a letter.",
         title: "Human title, 1-180 characters.",
-        goal: "Bounded outcome, 1-4000 characters.",
+        goal: "v1/v2 use a bounded string; v3 requires objective, boundaries, successEvidence, oracle, and independent Review.",
         revision: "Positive immutable authoring revision.",
         maxActive: "Positive concurrent Assignment limit, maximum 32; default 8.",
         nodes: "Two to 10,000 complete NodeSpec objects.",
@@ -319,6 +396,7 @@ export function graphSchemaDocument(): Readonly<Record<string, unknown>> {
         actorHint: "Optional scheduling hint only; null by default.",
         tags: "Stable identifier array.",
         resources: "At most 32 unique exclusive resources on Task, Subgraph, or Gate.",
+        work: "v3 requires every assignable node to declare execute or review Work and its evidence ownership.",
       },
       prompt: {
         maximumBytes: `The complete normalized prompt contract is at most ${MAX_PROMPT_CONTRACT_BYTES} UTF-8 bytes.`,
@@ -340,7 +418,8 @@ export function graphSchemaDocument(): Readonly<Record<string, unknown>> {
       },
       completion: {
         contextMaximumBytes:
-          `summary, evidence, and route together are at most ${MAX_COMPLETION_CONTEXT_BYTES} UTF-8 bytes; node-specific output is not repeated into successor context.`,
+          `summary, record, evidence claims, verdict, legacy evidence, and route together are at most ${MAX_COMPLETION_CONTEXT_BYTES} UTF-8 bytes; node-specific output is not repeated into successor context.`,
+        v3: "Execution Work records facts, decisions, blockers, artifacts, next, and evidenceClaims; Review Work returns pass or revise Verdict.",
       },
       scheduling: {
         actorAssignmentMaximumBytes:
@@ -354,6 +433,8 @@ export function graphSchemaDocument(): Readonly<Record<string, unknown>> {
       "Join has at least two incoming edges.",
       "Decision has at least two unique routes.",
       "GraphSpec v1 cannot use System Nodes, resources, or non-empty extended prompt fields.",
+      "GraphSpec v3 has exactly one unavoidable final Review, and every revise edge is bounded.",
+      "Every v3 Goal evidence ID is owned by execution Work and covered by final Review Work.",
     ],
     input: {
       file: "Use a project-relative existing JSON file that remains inside the project after realpath and symlink resolution.",
