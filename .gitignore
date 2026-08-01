@@ -2,7 +2,7 @@ node_modules/
 dist/
 .tmp/
 .run/
-.burn-subagent/
+.burn/subagent/
 test-results/
 playwright-report/
 apps/viewer/dist/
