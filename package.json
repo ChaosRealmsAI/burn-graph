@@ -31,9 +31,9 @@
     "verify:portfolio-performance": "bun scripts/verify/portfolio-performance.ts",
     "verify:control-performance": "bun scripts/verify/control-performance.ts",
     "verify:render-performance": "bun scripts/verify/render-performance.ts",
-    "verify:up11-e2e": "bun tests/e2e/user-paths/UP11-cli-author-run.e2e.ts",
-    "verify:up11-red": "bun tests/e2e/user-paths/UP11-cli-author-run.e2e.ts --fault help-surface && bun tests/e2e/user-paths/UP11-cli-author-run.e2e.ts --fault completion-state && bun tests/e2e/user-paths/UP11-cli-author-run.e2e.ts --fault packaged-help-drift",
-    "e2e": "bun run release:pack && bun test tests/e2e && bun run verify:up11-red && bun run verify:up11-e2e",
+    "verify:up11-e2e": "bun ../privacy/test-runtime/e2e/user-paths/UP11-cli-author-run.e2e.ts",
+    "verify:up11-red": "bun ../privacy/test-runtime/e2e/user-paths/UP11-cli-author-run.e2e.ts --fault help-surface && bun ../privacy/test-runtime/e2e/user-paths/UP11-cli-author-run.e2e.ts --fault completion-state && bun ../privacy/test-runtime/e2e/user-paths/UP11-cli-author-run.e2e.ts --fault packaged-help-drift",
+    "e2e": "bun run release:pack && bun test ../privacy/test-runtime/e2e && bun run verify:up11-red && bun run verify:up11-e2e",
     "verify": "bun run version:check && bun run check && bun run test && bun run build && bun run e2e && bun run verify:hierarchy-performance && bun run verify:portfolio-performance && bun run verify:control-performance && bun run verify:render-performance"
   },
   "dependencies": {

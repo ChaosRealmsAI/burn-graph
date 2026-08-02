@@ -1,0 +1,206 @@
+{
+  "$schema": "urn:burn:dev:v1:code-layout",
+  "schemaVersion": 1,
+  "id": "CODE-LAYOUT",
+  "revision": 1,
+  "profile": "fdd-polyglot",
+  "policy": {
+    "testOwnership": "privacy",
+    "unknownManagedPaths": "error",
+    "sharedMinimumConsumers": 2
+  },
+  "roots": {
+    "apps": "apps",
+    "features": null,
+    "shared": "shared",
+    "contracts": null,
+    "schemas": null,
+    "packages": "packages",
+    "crates": null,
+    "public": null,
+    "pocs": null,
+    "tools": null
+  },
+  "languages": [
+    {
+      "id": "LANG-TS",
+      "slug": "typescript",
+      "name": "TypeScript",
+      "sourceExtensions": [
+        ".ts",
+        ".tsx"
+      ],
+      "state": "active"
+    }
+  ],
+  "apps": [
+    {
+      "id": "APP-CLI",
+      "kind": "cli",
+      "root": "apps/cli",
+      "publicRoot": null,
+      "languageRefs": [
+        "LANG-TS"
+      ],
+      "state": "active"
+    },
+    {
+      "id": "APP-PRODUCT-PREVIEW",
+      "kind": "preview",
+      "root": "apps/product-preview",
+      "publicRoot": null,
+      "languageRefs": [
+        "LANG-TS"
+      ],
+      "state": "active"
+    },
+    {
+      "id": "APP-VIEWER",
+      "kind": "other",
+      "root": "apps/viewer",
+      "publicRoot": null,
+      "languageRefs": [
+        "LANG-TS"
+      ],
+      "state": "active"
+    }
+  ],
+  "features": [],
+  "sharedModules": [
+    {
+      "id": "SH-TYPES",
+      "kind": "platform",
+      "root": "shared/types",
+      "consumerRefs": [
+        "APP-CLI",
+        "APP-PRODUCT-PREVIEW",
+        "APP-VIEWER"
+      ],
+      "contractRefs": [],
+      "implementations": [
+        {
+          "languageRef": "LANG-TS",
+          "root": ".",
+          "roleRoots": {
+            "core": ".",
+            "adapters": null,
+            "surfaces": null,
+            "operability": null
+          },
+          "selfTestRoot": null
+        }
+      ],
+      "state": "active"
+    }
+  ],
+  "supportAreas": [
+    {
+      "id": "AREA-DOT-BURN",
+      "kind": "dogfood",
+      "root": ".burn",
+      "purpose": "Own the existing public .burn implementation boundary without inventing a product Feature.",
+      "state": "active"
+    },
+    {
+      "id": "AREA-DOCS",
+      "kind": "documentation",
+      "root": "docs",
+      "purpose": "Own the existing public docs implementation boundary without inventing a product Feature.",
+      "state": "active"
+    },
+    {
+      "id": "AREA-SCRIPTS",
+      "kind": "tooling",
+      "root": "scripts",
+      "purpose": "Own the existing public scripts implementation boundary without inventing a product Feature.",
+      "state": "active"
+    },
+    {
+      "id": "AREA-TESTS",
+      "kind": "implementation-tests",
+      "root": "tests",
+      "purpose": "Own the existing public tests implementation boundary without inventing a product Feature.",
+      "state": "active"
+    }
+  ],
+  "packages": [
+    {
+      "id": "PKG-CORE",
+      "ecosystem": "typescript",
+      "root": "packages/core",
+      "consumerRefs": [
+        "APP-CLI",
+        "APP-PRODUCT-PREVIEW",
+        "APP-VIEWER"
+      ],
+      "state": "active"
+    },
+    {
+      "id": "PKG-DESIGN-SYSTEM",
+      "ecosystem": "typescript",
+      "root": "packages/design-system",
+      "consumerRefs": [
+        "APP-CLI",
+        "APP-PRODUCT-PREVIEW",
+        "APP-VIEWER"
+      ],
+      "state": "active"
+    },
+    {
+      "id": "PKG-GATE",
+      "ecosystem": "typescript",
+      "root": "packages/gate",
+      "consumerRefs": [
+        "APP-CLI",
+        "APP-PRODUCT-PREVIEW",
+        "APP-VIEWER"
+      ],
+      "state": "active"
+    },
+    {
+      "id": "PKG-RENDER",
+      "ecosystem": "typescript",
+      "root": "packages/render",
+      "consumerRefs": [
+        "APP-CLI",
+        "APP-PRODUCT-PREVIEW",
+        "APP-VIEWER"
+      ],
+      "state": "active"
+    },
+    {
+      "id": "PKG-SYSTEM-DRIVER",
+      "ecosystem": "typescript",
+      "root": "packages/system-driver",
+      "consumerRefs": [
+        "APP-CLI",
+        "APP-PRODUCT-PREVIEW",
+        "APP-VIEWER"
+      ],
+      "state": "active"
+    },
+    {
+      "id": "PKG-TEMPLATES",
+      "ecosystem": "typescript",
+      "root": "packages/templates",
+      "consumerRefs": [
+        "APP-CLI",
+        "APP-PRODUCT-PREVIEW",
+        "APP-VIEWER"
+      ],
+      "state": "active"
+    }
+  ],
+  "crates": [],
+  "exceptions": [],
+  "history": [
+    {
+      "at": "2026-08-02T16:24:18.041Z",
+      "by": "main-codex",
+      "operation": "adopt",
+      "targetId": "CODE-LAYOUT",
+      "reason": "Register the existing product code owners under the Burn Dev layout Harness."
+    }
+  ],
+  "updatedAt": "2026-08-02T16:24:18.041Z"
+}
