@@ -9,8 +9,6 @@ export type JsonValue =
 export const MAX_PROMPT_CONTRACT_BYTES = 32 * 1024;
 export const MAX_COMPLETION_CONTEXT_BYTES = 8 * 1024;
 export const MAX_ACTOR_ASSIGNMENT_BYTES = 128 * 1024;
-export const MAX_GOAL_CONTRACT_BYTES = 32 * 1024;
-export const MAX_GOAL_AMENDMENT_BYTES = 8 * 1024;
 
 function serializedBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
@@ -67,87 +65,6 @@ export const PromptContractSchema = z
     writablePaths: [],
     forbidden: [],
     runtime: [],
-  });
-
-export const GoalEvidenceRequirementSchema = z
-  .object({
-    id: IdentifierSchema,
-    description: z.string().trim().min(1).max(2_000),
-    acceptance: z.array(z.string().trim().min(1).max(2_000)).min(1).max(32),
-    oracle: z.string().trim().min(1).max(2_000),
-  })
-  .strict();
-
-export const GoalReviewPolicySchema = z
-  .object({
-    required: z.literal(true),
-    independentActor: z.literal(true),
-    criteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(32),
-  })
-  .strict();
-
-export const GoalContractSchema = z
-  .object({
-    objective: z.string().trim().min(1).max(4_000),
-    boundaries: z.array(z.string().trim().min(1).max(2_000)).max(64).default([]),
-    successEvidence: z.array(GoalEvidenceRequirementSchema).min(1).max(64),
-    review: GoalReviewPolicySchema,
-  })
-  .strict()
-  .superRefine((goal, context) => {
-    const ids = goal.successEvidence.map((evidence) => evidence.id);
-    if (new Set(ids).size !== ids.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["successEvidence"],
-        message: "Goal success-evidence IDs must be unique",
-      });
-    }
-    if (serializedBytes(goal) > MAX_GOAL_CONTRACT_BYTES) {
-      context.addIssue({
-        code: "custom",
-        message: `Goal contract exceeds ${MAX_GOAL_CONTRACT_BYTES} UTF-8 bytes`,
-      });
-    }
-  });
-
-export const WorkKindSchema = z.enum(["execute", "review"]);
-export const WorkContractSchema = z
-  .object({
-    kind: WorkKindSchema,
-    evidence: z.array(IdentifierSchema).max(64).default([]),
-    reviewOf: z.array(IdentifierSchema).max(256).default([]),
-  })
-  .strict()
-  .superRefine((work, context) => {
-    if (new Set(work.evidence).size !== work.evidence.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["evidence"],
-        message: "Work evidence IDs must be unique",
-      });
-    }
-    if (new Set(work.reviewOf).size !== work.reviewOf.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["reviewOf"],
-        message: "Reviewed Work IDs must be unique",
-      });
-    }
-    if (work.kind === "execute" && work.reviewOf.length > 0) {
-      context.addIssue({
-        code: "custom",
-        path: ["reviewOf"],
-        message: "Execution Work cannot review other Work",
-      });
-    }
-    if (work.kind === "review" && work.reviewOf.length === 0) {
-      context.addIssue({
-        code: "custom",
-        path: ["reviewOf"],
-        message: "Review Work must name the Work it reviews",
-      });
-    }
   });
 
 export const NextEdgeSpecSchema = z
@@ -366,7 +283,6 @@ export const NodeSpecSchema = z
     check: CheckReferenceSchema.optional(),
     signal: WaitSignalSpecSchema.optional(),
     resources: ResourceNamesSchema.optional(),
-    work: WorkContractSchema.optional(),
   })
   .strict()
   .superRefine((node, context) => {
@@ -553,22 +469,9 @@ const GraphSpecV2Schema = z
   })
   .strict();
 
-const GraphSpecV3Schema = z
-  .object({
-    schemaVersion: z.literal(3),
-    id: IdentifierSchema,
-    title: z.string().trim().min(1).max(180),
-    goal: GoalContractSchema,
-    revision: z.number().int().positive(),
-    maxActive: z.number().int().positive().max(32).default(8),
-    nodes: z.array(NodeSpecSchema).min(2).max(10_000),
-  })
-  .strict();
-
 export const GraphSpecSchema = z.discriminatedUnion("schemaVersion", [
   GraphSpecV1Schema,
   GraphSpecV2Schema,
-  GraphSpecV3Schema,
 ]);
 
 export type PromptContract = z.infer<typeof PromptContractSchema>;
@@ -576,11 +479,6 @@ export type NextEdgeSpec = z.infer<typeof NextEdgeSpecSchema>;
 export type NodeSpec = z.infer<typeof NodeSpecSchema>;
 export type GraphSpec = z.infer<typeof GraphSpecSchema>;
 export type ChildRunDescriptor = z.infer<typeof ChildRunDescriptorSchema>;
-export type GoalEvidenceRequirement = z.infer<
-  typeof GoalEvidenceRequirementSchema
->;
-export type GoalContract = z.infer<typeof GoalContractSchema>;
-export type WorkContract = z.infer<typeof WorkContractSchema>;
 
 export const NodeStatusSchema = z.enum([
   "pending",
@@ -618,58 +516,6 @@ export const CompletionInputSchema = z
     summary: z.string().trim().min(1).max(20_000),
     output: z.unknown().optional(),
     evidence: z.array(z.string().trim().min(1).max(2_000)).default([]),
-    record: z
-      .object({
-        facts: z.array(z.string().trim().min(1).max(2_000)).max(64).default([]),
-        decisions: z
-          .array(
-            z
-              .object({
-                summary: z.string().trim().min(1).max(2_000),
-                reason: z.string().trim().min(1).max(2_000),
-              })
-              .strict(),
-          )
-          .max(32)
-          .default([]),
-        blockers: z.array(z.string().trim().min(1).max(2_000)).max(32).default([]),
-        artifacts: z.array(z.string().trim().min(1).max(2_000)).max(64).default([]),
-        next: z.string().trim().min(1).max(2_000).nullable().default(null),
-      })
-      .strict()
-      .optional(),
-    evidenceClaims: z
-      .array(
-        z
-          .object({
-            evidenceId: IdentifierSchema,
-            summary: z.string().trim().min(1).max(2_000),
-            artifacts: z.array(z.string().trim().min(1).max(2_000)).max(64).default([]),
-          })
-          .strict(),
-      )
-      .max(64)
-      .default([]),
-    verdict: z
-      .object({
-        decision: z.enum(["pass", "revise"]),
-        summary: z.string().trim().min(1).max(2_000),
-        evidence: z.array(IdentifierSchema).max(64).default([]),
-        findings: z
-          .array(
-            z
-              .object({
-                severity: z.enum(["info", "warning", "blocking"]),
-                summary: z.string().trim().min(1).max(2_000),
-                evidenceId: IdentifierSchema.nullable().default(null),
-              })
-              .strict(),
-          )
-          .max(64)
-          .default([]),
-      })
-      .strict()
-      .optional(),
     route: IdentifierSchema.optional(),
   })
   .strict()
@@ -677,9 +523,6 @@ export const CompletionInputSchema = z
     const bytes = serializedBytes({
       summary: value.summary,
       evidence: value.evidence,
-      record: value.record ?? null,
-      evidenceClaims: value.evidenceClaims,
-      verdict: value.verdict ?? null,
       route: value.route ?? null,
     });
     if (bytes > MAX_COMPLETION_CONTEXT_BYTES) {
@@ -691,9 +534,6 @@ export const CompletionInputSchema = z
     }
   });
 export type CompletionInput = z.infer<typeof CompletionInputSchema>;
-export type WorkRecord = NonNullable<CompletionInput["record"]>;
-export type GoalEvidenceClaim = CompletionInput["evidenceClaims"][number];
-export type ReviewVerdict = NonNullable<CompletionInput["verdict"]>;
 
 export const DynamicSubgraphOutputSchema = z
   .object({
@@ -709,138 +549,9 @@ export const CheckpointInputSchema = z
     summary: z.string().trim().min(1).max(20_000),
     progress: z.number().min(0).max(100).nullable().default(null),
     artifacts: z.array(z.string().trim().min(1).max(2_000)).default([]),
-    record: CompletionInputSchema.shape.record,
   })
   .strict();
 export type CheckpointInput = z.infer<typeof CheckpointInputSchema>;
-
-const GoalEvidenceAddChangeSchema = z
-  .object({
-    op: z.literal("add"),
-    evidence: GoalEvidenceRequirementSchema,
-    ownerWorkId: IdentifierSchema,
-  })
-  .strict();
-
-const GoalEvidenceUpdateChangeSchema = z
-  .object({
-    op: z.literal("update"),
-    evidenceId: IdentifierSchema,
-    description: z.string().trim().min(1).max(2_000).optional(),
-    acceptance: z.array(z.string().trim().min(1).max(2_000)).min(1).max(32).optional(),
-    oracle: z.string().trim().min(1).max(2_000).optional(),
-  })
-  .strict()
-  .superRefine((change, context) => {
-    if (
-      change.description === undefined &&
-      change.acceptance === undefined &&
-      change.oracle === undefined
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Goal evidence update requires at least one changed field",
-      });
-    }
-  });
-
-const GoalEvidenceRemoveChangeSchema = z
-  .object({
-    op: z.literal("remove"),
-    evidenceId: IdentifierSchema,
-  })
-  .strict();
-
-export const GoalAmendmentChangeSchema = z.discriminatedUnion("op", [
-  GoalEvidenceAddChangeSchema,
-  GoalEvidenceUpdateChangeSchema,
-  GoalEvidenceRemoveChangeSchema,
-]);
-
-export const GoalAmendmentProposalInputSchema = z
-  .object({
-    reason: z.string().trim().min(1).max(4_000),
-    changes: z.array(GoalAmendmentChangeSchema).min(1).max(64),
-  })
-  .strict()
-  .superRefine((proposal, context) => {
-    if (serializedBytes(proposal) > MAX_GOAL_AMENDMENT_BYTES) {
-      context.addIssue({
-        code: "custom",
-        message:
-          `Goal amendment exceeds ${MAX_GOAL_AMENDMENT_BYTES} UTF-8 bytes`,
-      });
-    }
-  });
-
-export const GoalAmendmentReviewInputSchema = z
-  .object({
-    verdict: z.enum(["accept", "reject"]),
-    summary: z.string().trim().min(1).max(4_000),
-    userApproved: z.boolean().default(false),
-  })
-  .strict();
-
-export type GoalAmendmentChange = z.infer<typeof GoalAmendmentChangeSchema>;
-export type GoalAmendmentProposalInput = z.infer<
-  typeof GoalAmendmentProposalInputSchema
->;
-export type GoalAmendmentReviewInput = z.infer<
-  typeof GoalAmendmentReviewInputSchema
->;
-
-export interface GoalAmendmentSummary {
-  readonly amendmentId: string;
-  readonly status: "pending" | "applied" | "rejected";
-  readonly proposerActorId: string;
-  readonly reviewerActorId: string | null;
-  readonly reason: string;
-  readonly changes: readonly GoalAmendmentChange[];
-  readonly review: GoalAmendmentReviewInput | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface GoalSnapshot {
-  readonly schemaVersion: 1;
-  readonly objective: string;
-  readonly boundaries: readonly string[];
-  readonly status:
-    | "active"
-    | "reviewing"
-    | "amendment_pending"
-    | "satisfied"
-    | "failed"
-    | "cancelled";
-  readonly progress: {
-    readonly percent: number;
-    readonly work: {
-      readonly total: number;
-      readonly executed: number;
-      readonly verified: number;
-    };
-    readonly evidence: {
-      readonly required: number;
-      readonly claimed: number;
-      readonly verified: number;
-    };
-  };
-  readonly evidence: readonly (GoalEvidenceRequirement & {
-    readonly ownerWorkId: string;
-    readonly claimed: boolean;
-    readonly verified: boolean;
-    readonly claimCount: number;
-  })[];
-  readonly review: {
-    readonly required: true;
-    readonly independentActor: true;
-    readonly status: "pending" | "ready" | "running" | "revise" | "pass";
-    readonly reviewerActorId: string | null;
-    readonly summary: string | null;
-    readonly findings: ReviewVerdict["findings"];
-  };
-  readonly amendments: readonly GoalAmendmentSummary[];
-}
 
 export interface ProjectConfig {
   readonly schemaVersion: 1;
@@ -898,7 +609,6 @@ export interface GraphSummary {
   readonly graphId: string;
   readonly title: string;
   readonly goal: string;
-  readonly goalState: GoalSnapshot | null;
   readonly specRevision: number;
   readonly runtimeRevision: number;
   readonly status: GraphStatus;
@@ -983,7 +693,6 @@ export interface AssignmentPacket {
     readonly graphId: string;
     readonly title: string;
     readonly goal: string;
-    readonly goalState: GoalSnapshot | null;
     readonly specRevision: number;
     readonly runtimeRevision: number;
     readonly progress: GraphCounts;
@@ -995,7 +704,6 @@ export interface AssignmentPacket {
     readonly attempt: number;
     readonly actorHint: string | null;
     readonly prompt: PromptContract;
-    readonly work: WorkContract | null;
     readonly routes: readonly {
       readonly route: string;
       readonly to: string;

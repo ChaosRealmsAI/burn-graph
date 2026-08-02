@@ -331,7 +331,6 @@ describe("dev.4 hierarchy migration", () => {
         { version: 4 },
         { version: 5 },
         { version: 6 },
-        { version: 7 },
       ]);
       expect(
         (

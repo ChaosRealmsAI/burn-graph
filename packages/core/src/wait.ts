@@ -35,7 +35,6 @@ export function waitCompletion(
   return {
     summary: input.summary,
     evidence: input.evidence,
-    evidenceClaims: [],
     route,
   };
 }

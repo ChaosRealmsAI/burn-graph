@@ -30,7 +30,6 @@ import {
   type GraphSpec,
   type GraphStatus,
   type GraphSummary,
-  type GoalSnapshot,
   type IdempotentMutationResult,
   type MutationResult,
   type ProjectConfig,
@@ -47,7 +46,6 @@ import { RunLifecycle } from "./service-lifecycle.ts";
 import { RunProjection } from "./service-projection.ts";
 import { deriveRuntimeMetrics } from "./metrics.ts";
 import { renderMermaid, renderTreeMermaid } from "./mermaid.ts";
-import { goalObjective } from "./goal-runtime.ts";
 import {
   json,
   numberValue,
@@ -87,7 +85,10 @@ interface AssignmentExpectation {
 }
 
 type LifecycleOperation =
-  "pause" | "resume" | "cancel" | `priority:${RunPriority}`;
+  | "pause"
+  | "resume"
+  | "cancel"
+  | `priority:${RunPriority}`;
 
 type ResumeContinuation = WorkSchedule & {
   readonly resumed: GraphSummary;
@@ -150,7 +151,7 @@ export function resourceEligibility(
   lockedResources: ReadonlySet<string>,
 ): ReadyWork["eligibility"] {
   const blockedResources = resources.filter((resource) =>
-    lockedResources.has(resource),
+    lockedResources.has(resource)
   );
   return {
     eligible: blockedResources.length === 0,
@@ -159,29 +160,21 @@ export function resourceEligibility(
   };
 }
 
+
 export interface RuntimeInternalsOptions {
   readonly config: ProjectConfig;
   readonly database: BurnGraphDatabase;
   readonly now: () => Date;
   readonly authoring: GraphAuthoring;
-  readonly getSnapshot: (
-    reference: string,
-    eventLimit?: number,
-  ) => GraphSnapshot;
-  readonly readSnapshot: (
-    reference: string,
-    eventLimit: number,
-  ) => GraphSnapshot;
-  readonly goalSnapshot: (runId: string) => GoalSnapshot | null;
+  readonly getSnapshot: (reference: string, eventLimit?: number) => GraphSnapshot;
+  readonly readSnapshot: (reference: string, eventLimit: number) => GraphSnapshot;
 }
 
 export class RuntimeInternals {
   constructor(private readonly options: RuntimeInternalsOptions) {}
 
-  // Graph revisions are immutable once registered. A public CLI command often
-  // needs the same validated document for start, projection, scheduling, and
-  // Assignment construction; parsing a wide graph at every layer turns one
-  // command into repeated O(nodes + edges) work.
+  // Registered Graph revisions are immutable. Cache validation so one public
+  // command does not repeatedly parse a wide document at each runtime layer.
   readonly #validatedGraphs = new Map<string, ValidatedGraph>();
 
   timestamp(): string {
@@ -219,7 +212,10 @@ export class RuntimeInternals {
       if (existing) {
         const storedOperation = stringValue(existing, "operation");
         const storedReference = stringValue(existing, "request_reference");
-        if (storedOperation !== operation || storedReference !== reference) {
+        if (
+          storedOperation !== operation ||
+          storedReference !== reference
+        ) {
           throw new BurnGraphError(
             "IDEMPOTENCY_KEY_CONFLICT",
             `Idempotency key ${key} already owns another lifecycle request`,
@@ -326,7 +322,6 @@ export class RuntimeInternals {
     if (cached !== undefined) return cached;
     const validated = validateGraphSpec(
       JSON.parse(stringValue(row, "document_json")),
-      { allowLegacyDormantLoopTarget: true },
     );
     if (this.#validatedGraphs.size >= MAX_VALIDATED_GRAPH_CACHE_ENTRIES) {
       const oldest = this.#validatedGraphs.keys().next().value;
@@ -400,10 +395,7 @@ export class RuntimeInternals {
   resolveRun(reference: string): string {
     const runId = this.tryResolveRun(reference);
     if (!runId) {
-      throw new BurnGraphError(
-        "RUN_NOT_FOUND",
-        `Unknown run or graph ${reference}`,
-      );
+      throw new BurnGraphError("RUN_NOT_FOUND", `Unknown run or graph ${reference}`);
     }
     return runId;
   }
@@ -649,8 +641,7 @@ export class RuntimeInternals {
       runId,
       graphId,
       title: spec.title,
-      goal: goalObjective(spec),
-      goalState: this.options.goalSnapshot(runId),
+      goal: spec.goal,
       specRevision: numberValue(row, "spec_revision"),
       runtimeRevision: numberValue(row, "runtime_revision"),
       status: GraphStatusSchema.parse(stringValue(row, "status")),
@@ -729,7 +720,8 @@ export class RuntimeInternals {
           output: {
             children: replayOutput.data.children.map((child, index) => ({
               ...child,
-              runId: child.runId ?? storedOutput.data.children[index]?.runId,
+              runId:
+                child.runId ?? storedOutput.data.children[index]?.runId,
             })),
           },
         };
@@ -883,7 +875,8 @@ export class RuntimeInternals {
       );
     }
     const minimum = node.mode === "dynamic" ? (node.minChildren ?? 1) : 1;
-    const maximum = node.mode === "dynamic" ? (node.maxChildren ?? 32) : 32;
+    const maximum =
+      node.mode === "dynamic" ? (node.maxChildren ?? 32) : 32;
     if (descriptors.length < minimum || descriptors.length > maximum) {
       throw new BurnGraphError(
         "HIERARCHY_LIMIT",
@@ -1007,7 +1000,10 @@ export class RuntimeInternals {
             { depth: depth + 1, limit: this.options.config.maxHierarchyDepth },
           );
         }
-        const childGraph = this.loadGraph(child.graphId, child.revision).spec;
+        const childGraph = this.loadGraph(
+          child.graphId,
+          child.revision,
+        ).spec;
         descendants += this.assertStaticDescendantsAvoidAncestors(
           childGraph,
           new Set([...ancestors, child.graphId]),
@@ -1100,7 +1096,12 @@ export class RuntimeInternals {
       { nodeId: start.id, status: "done" },
     ];
     this.cascade(child, descriptor.runId, at, changes);
-    this.driveStaticSubgraphs(descriptor.runId, at, changes, runtimeChanges);
+    this.driveStaticSubgraphs(
+      descriptor.runId,
+      at,
+      changes,
+      runtimeChanges,
+    );
     this.refreshRunTerminalStatus(descriptor.runId, at);
     const sequence = this.appendEvent({
       runId: descriptor.runId,
@@ -1118,7 +1119,10 @@ export class RuntimeInternals {
       at,
     });
     runtimeChanges.push({
-      revision: numberValue(this.runRow(descriptor.runId), "runtime_revision"),
+      revision: numberValue(
+        this.runRow(descriptor.runId),
+        "runtime_revision",
+      ),
       event: this.getEvent(sequence),
     });
   }
@@ -1196,7 +1200,13 @@ export class RuntimeInternals {
       children: normalized.map((descriptor) => descriptor.runId),
     });
     runtimeChanges.push(
-      ...this.settleSubgraphIfTerminal(parentRunId, nodeId, at, changes, false),
+      ...this.settleSubgraphIfTerminal(
+        parentRunId,
+        nodeId,
+        at,
+        changes,
+        false,
+      ),
     );
     return normalized;
   }
@@ -1304,7 +1314,6 @@ export class RuntimeInternals {
       const result: CompletionInput = {
         summary: `Child Runs settled as ${outcome}.`,
         evidence: [],
-        evidenceClaims: [],
         route: outcome,
       };
       this.options.database.db
@@ -1318,7 +1327,12 @@ export class RuntimeInternals {
       this.selectDecisionEdge(parentRunId, nodeId, outcome, at);
       const graph = this.graphForRun(parentRunId);
       this.cascade(graph, parentRunId, at, changes);
-      this.driveStaticSubgraphs(parentRunId, at, changes, nestedChanges);
+      this.driveStaticSubgraphs(
+        parentRunId,
+        at,
+        changes,
+        nestedChanges,
+      );
       this.refreshRunTerminalStatus(parentRunId, at);
     }
     changes.push({ nodeId, status: selected ? "done" : "failed", outcome });
@@ -1342,10 +1356,16 @@ export class RuntimeInternals {
       },
       at,
     });
-    return [...nestedChanges, { revision, event: this.getEvent(sequence) }];
+    return [
+      ...nestedChanges,
+      { revision, event: this.getEvent(sequence) },
+    ];
   }
 
-  settleAncestors(childRunId: string, at: string): readonly RuntimeChange[] {
+  settleAncestors(
+    childRunId: string,
+    at: string,
+  ): readonly RuntimeChange[] {
     const settled: RuntimeChange[] = [];
     let current = this.runRow(childRunId);
     while (optionalString(current, "parent_run_id") !== null) {
@@ -1459,7 +1479,9 @@ export class RuntimeInternals {
     }
     const resetNodes = new Set(body);
     for (const nodeId of reachableFromBody) {
-      if (stringValue(this.nodeRow(runId, nodeId), "status") === "skipped") {
+      if (
+        stringValue(this.nodeRow(runId, nodeId), "status") === "skipped"
+      ) {
         resetNodes.add(nodeId);
       }
     }
@@ -1512,9 +1534,7 @@ export class RuntimeInternals {
       .get(runId) as Row;
     if (numberValue(failed, "count") > 0) {
       this.options.database.db
-        .query(
-          "UPDATE runs SET status = 'failed', updated_at = ? WHERE run_id = ?",
-        )
+        .query("UPDATE runs SET status = 'failed', updated_at = ? WHERE run_id = ?")
         .run(at, runId);
       return;
     }
@@ -1537,8 +1557,6 @@ export class RuntimeInternals {
       numberValue(unfinished, "count") === 0 &&
       stringValue(end, "status") === "done"
     ) {
-      const goal = this.options.goalSnapshot(runId);
-      if (goal !== null && goal.status !== "satisfied") return;
       this.options.database.db
         .query(
           "UPDATE runs SET status = 'completed', focused_node_id = NULL, updated_at = ? WHERE run_id = ?",
@@ -1566,16 +1584,12 @@ export class RuntimeInternals {
     expectation?: AssignmentExpectation,
   ): MutationResult<RuntimeNode> {
     if (reason.trim().length === 0) {
-      throw new BurnGraphError(
-        "REASON_REQUIRED",
-        "A non-empty reason is required",
-      );
+      throw new BurnGraphError("REASON_REQUIRED", "A non-empty reason is required");
     }
     const runId = this.resolveRun(reference);
     const graph = this.graphForRun(runId);
     const nodeSpec = graph.nodesById.get(nodeId);
-    if (!nodeSpec)
-      throw new BurnGraphError("NODE_NOT_FOUND", `Unknown node ${nodeId}`);
+    if (!nodeSpec) throw new BurnGraphError("NODE_NOT_FOUND", `Unknown node ${nodeId}`);
     const now = this.options.now();
     const at = now.toISOString();
     const stopped = this.options.database.immediate(() => {
@@ -1801,10 +1815,7 @@ export class RuntimeInternals {
     status?: GraphStatus,
     focusedNodeId?: string | null,
   ): number {
-    const assignments = [
-      "runtime_revision = runtime_revision + 1",
-      "updated_at = ?",
-    ];
+    const assignments = ["runtime_revision = runtime_revision + 1", "updated_at = ?"];
     const values: Array<string | null> = [at];
     if (status !== undefined) {
       assignments.push("status = ?");
@@ -1873,7 +1884,10 @@ export class RuntimeInternals {
     };
   }
 
-  recentEventsForRun(runId: string, limit: number): readonly GraphEvent[] {
+  recentEventsForRun(
+    runId: string,
+    limit: number,
+  ): readonly GraphEvent[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
       throw new BurnGraphError("INVALID_LIMIT", "Event limit must be 1-1000");
     }
@@ -1898,11 +1912,11 @@ export class RuntimeInternals {
     const graph = this.graphForRun(runId);
     const nodeRuntime = this.runtimeNode(this.nodeRow(runId, nodeId));
     const nodeSpec = graph.nodesById.get(nodeId);
-    if (!nodeSpec || !isAssignableNode(nodeSpec)) {
-      throw new BurnGraphError(
-        "NODE_NOT_FOUND",
-        `Unknown assignment ${nodeId}`,
-      );
+    if (
+      !nodeSpec ||
+      !isAssignableNode(nodeSpec)
+    ) {
+      throw new BurnGraphError("NODE_NOT_FOUND", `Unknown assignment ${nodeId}`);
     }
     if (
       nodeRuntime.actorId !== actorId ||
@@ -1923,11 +1937,15 @@ export class RuntimeInternals {
       )
       .all(runId, nodeId) as Row[];
     const predecessorIds = [
-      ...new Set(incoming.map((edge) => stringValue(edge, "from_node_id"))),
+      ...new Set(
+        incoming.map((edge) => stringValue(edge, "from_node_id")),
+      ),
     ];
     const predecessors = predecessorIds
       .map((predecessorId) => {
-        const runtime = this.runtimeNode(this.nodeRow(runId, predecessorId));
+        const runtime = this.runtimeNode(
+          this.nodeRow(runId, predecessorId),
+        );
         const spec = graph.nodesById.get(predecessorId);
         if (!spec) return null;
         const previous =
@@ -1958,7 +1976,6 @@ export class RuntimeInternals {
         graphId: summary.graphId,
         title: summary.title,
         goal: summary.goal,
-        goalState: summary.goalState,
         specRevision: summary.specRevision,
         runtimeRevision: summary.runtimeRevision,
         progress: summary.counts,
@@ -1970,7 +1987,6 @@ export class RuntimeInternals {
         attempt: nodeRuntime.attempt,
         actorHint: nodeSpec.actorHint,
         prompt: nodeSpec.prompt,
-        work: nodeSpec.work ?? null,
         routes: this.edgeRowsFrom(runId, nodeId)
           .filter((edge) => optionalString(edge, "route") !== null)
           .map((edge) => ({
@@ -1990,10 +2006,10 @@ export class RuntimeInternals {
         leaseExpiresAt: nodeRuntime.leaseExpiresAt,
       },
       returnProtocol: {
-        checkpoint: `burn-graph work checkpoint --assignment ${nodeRuntime.assignmentId} --input -`,
-        complete: `burn-graph work done --assignment ${nodeRuntime.assignmentId} --input -`,
-        block: `burn-graph work block --assignment ${nodeRuntime.assignmentId} --reason <text>`,
-        fail: `burn-graph work fail --assignment ${nodeRuntime.assignmentId} --reason <text>`,
+        checkpoint: `burn-graph recover checkpoint --assignment ${nodeRuntime.assignmentId} --input -`,
+        complete: `burn-graph done --assignment ${nodeRuntime.assignmentId} --input -`,
+        block: `burn-graph recover block --assignment ${nodeRuntime.assignmentId} --reason <text>`,
+        fail: `burn-graph recover fail --assignment ${nodeRuntime.assignmentId} --reason <text>`,
       },
     };
   }
@@ -2051,6 +2067,7 @@ export class RuntimeInternals {
     };
   }
 }
+
 
 function edgeStatus(row: Row): RuntimeEdge["status"] {
   const value = stringValue(row, "status");

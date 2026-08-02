@@ -221,7 +221,6 @@ export class BurnGraphService extends BurnGraphServiceBase {
           ? "Gate executable could not be started."
           : `Gate ${result.classification}.`,
         evidence: [],
-        evidenceClaims: [],
         route: route ?? undefined,
       };
       this.database.db

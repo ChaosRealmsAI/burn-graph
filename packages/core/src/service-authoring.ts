@@ -23,7 +23,6 @@ import { json, numberValue, stringValue, type Row } from "./sql.ts";
 import { BurnGraphDatabase } from "./storage.ts";
 import { TemplateRegistry } from "./template-service.ts";
 import { validateGraphSpec, type ValidatedGraph } from "./validator.ts";
-import { goalObjective } from "./goal-runtime.ts";
 
 export interface GraphAuthoringOptions {
   readonly root: string;
@@ -109,7 +108,7 @@ export class GraphAuthoring {
   }
 
   validateHierarchyReferences(spec: GraphSpec): void {
-    if (spec.schemaVersion === 1) return;
+    if (spec.schemaVersion !== 2) return;
 
     let descendantCount = 0;
     const visit = (
@@ -161,7 +160,11 @@ export class GraphAuthoring {
             child.graphId,
             child.revision,
           ).spec;
-          visit(childSpec, new Set([...ancestors, child.graphId]), depth + 1);
+          visit(
+            childSpec,
+            new Set([...ancestors, child.graphId]),
+            depth + 1,
+          );
         }
       }
     };
@@ -194,13 +197,12 @@ export class GraphAuthoring {
       return rows.map((row) => {
         const spec = validateGraphSpec(
           JSON.parse(stringValue(row, "document_json")),
-          { allowLegacyDormantLoopTarget: true },
         ).spec;
         const latestRun = this.options.tryResolveRun(spec.id);
         return {
           id: spec.id,
           title: spec.title,
-          goal: goalObjective(spec),
+          goal: spec.goal,
           revision: spec.revision,
           latestRun: latestRun ? this.options.summaryForRun(latestRun) : null,
         };
@@ -304,4 +306,5 @@ export class GraphAuthoring {
       this.options.loadCheck(node.check.id, node.check.revision);
     }
   }
+
 }

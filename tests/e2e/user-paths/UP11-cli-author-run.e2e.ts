@@ -150,12 +150,12 @@ const result = Bun.spawnSync([real, ...args], {
 });
 let stdout = result.stdout.toString();
 function corrupt(envelope) {
-  // Root Help publishes one command too many: the six-entry product loop is the
+  // Root Help publishes one command too many: the eight-entry daily loop is the
   // claim step 01 owns.
   if (kind === "help-surface" && args.includes("--help")) {
     envelope.data.commands = [
       ...envelope.data.commands,
-      { name: "run", summary: "leaked compatibility area", help: "burn-graph run --help" },
+      { name: "graph", summary: "leaked advanced area", help: "burn-graph graph --help" },
     ];
     return true;
   }
@@ -166,7 +166,7 @@ function corrupt(envelope) {
     return true;
   }
   // Root Help drifts from the asset shipped inside the archive without changing
-  // the six-command surface, so only step 07 can catch it.
+  // the eight-command surface, so only step 07 can catch it.
   if (kind === "packaged-help-drift" && args.includes("--help")) {
     envelope.data.summary = "drifted summary the packaged asset does not carry";
     return true;
@@ -473,7 +473,7 @@ try {
       id: "01",
       pathStep: "从根 Help 发现短日常循环",
       action: "仅执行安装命令的 root Help 与 authoring Help。",
-      expected: "根命令严格为六个产品入口，旧执行兼容区不进入第一屏。",
+      expected: "根命令严格为八个日常入口，Graph 高级区仅在主题 Help 中渐进披露。",
     },
     () => {
       const rootHelp = invoke(["--help"]);
@@ -482,10 +482,10 @@ try {
         .map((entry) => object(entry, "root Help command")["name"]);
       jsonEqual(
         commandNames,
-        ["init", "goal", "graph", "work", "inspect", "help"],
+        ["init", "template", "run", "next", "current", "done", "inspect", "help"],
         "root Help commands",
       );
-      assert(!commandNames.includes("run"), "root Help exposed compatibility run");
+      assert(!commandNames.includes("graph"), "root Help exposed advanced graph");
       const topicNames = array(rootData["topics"], "root Help topics")
         .map((entry) => object(entry, "root Help topic")["name"]);
       assert(topicNames.includes("authoring"), "authoring topic is missing");
@@ -500,8 +500,8 @@ try {
       );
       const sequence = strings(content["sequence"], "authoring sequence");
       assert(
-        sequence.includes("burn-graph goal start <graph>"),
-        "authoring Help omits goal start",
+        sequence.includes("burn-graph run start <graph>"),
+        "authoring Help omits run start",
       );
       return {
         value: { rootHelp, authoring },
@@ -516,20 +516,20 @@ try {
       id: "02",
       pathStep: "从完整 Schema 与 decision 示例创作 Graph",
       action: "请求 graph schema 与 graph example decision，并只改写公开示例的项目标识与目标。",
-      expected: "Schema 覆盖 GraphSpec v1/v2/v3；示例完整，不需要源码文档。",
+      expected: "Schema 覆盖 GraphSpec v1/v2；示例完整，不需要源码文档。",
     },
     () => {
       const schema = invoke(["graph", "schema"]);
       const schemaData = data(schema, "graph schema");
       jsonEqual(
         schemaData["acceptedGraphSpecVersions"],
-        [1, 2, 3],
+        [1, 2],
         "accepted GraphSpec versions",
       );
       const jsonSchema = object(schemaData["jsonSchema"], "GraphSpec JSON Schema");
       assert(
-        array(jsonSchema["oneOf"], "GraphSpec schema oneOf").length === 3,
-        "GraphSpec schema must define v1, v2, and v3",
+        array(jsonSchema["oneOf"], "GraphSpec schema oneOf").length === 2,
+        "GraphSpec schema must define v1 and v2",
       );
       const example = invoke(["graph", "example", "decision"]);
       const exampleData = data(example, "decision example");
@@ -547,7 +547,7 @@ try {
       );
       return {
         value: adapted,
-        observed: `Schema 接受 v1/v2/v3；decision 示例含 ${array(adapted["nodes"], "authored nodes").length} 个完整节点，已保存为 graph.json。`,
+        observed: `Schema 接受 v1/v2；decision 示例含 ${array(adapted["nodes"], "authored nodes").length} 个完整节点，已保存为 graph.json。`,
       };
     },
   );
@@ -652,7 +652,7 @@ try {
       const returnProtocol = object(first["returnProtocol"], "return protocol");
       assert(
         returnProtocol["complete"] ===
-          `burn-graph work done --assignment ${assignmentId} --input -`,
+          `burn-graph done --assignment ${assignmentId} --input -`,
         "Assignment complete command is not exact",
       );
       return {

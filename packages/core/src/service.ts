@@ -21,7 +21,6 @@ import {
   type GraphSpec,
   type GraphSummary,
   type GraphTreeSnapshot,
-  type GoalSnapshot,
   type IdempotentMutationResult,
   type MutationResult,
   type PortfolioOverview,
@@ -71,7 +70,6 @@ import {
   orderReadyWork,
 } from "./scheduler.ts";
 import { BurnGraphDatabase } from "./storage.ts";
-import { GoalRuntime } from "./goal-runtime.ts";
 import {
   recoverTemplateTransactions,
 } from "./template-service.ts";
@@ -177,16 +175,6 @@ export class BurnGraphServiceBase {
       authoring: this.authoring,
       getSnapshot: (reference, eventLimit) => this.getSnapshot(reference, eventLimit),
       readSnapshot: (reference, eventLimit) => this.readSnapshot(reference, eventLimit),
-      goalSnapshot: (runId) => this.goalRuntime.snapshot(runId),
-    });
-    this.goalRuntime = new GoalRuntime({
-      database: this.database,
-      timestamp: () => this.internals.timestamp(),
-      resolveRun: (reference) => this.internals.resolveRun(reference),
-      graphForRun: (runId) => this.internals.graphForRun(runId),
-      bumpRun: (runId, at) => this.internals.bumpRun(runId, at),
-      appendEvent: (entry) => this.internals.appendEvent(entry),
-      getEvent: (sequence) => this.internals.getEvent(sequence),
     });
     this.lifecycle = new RunLifecycle({
       database: this.database,
@@ -215,7 +203,6 @@ export class BurnGraphServiceBase {
   private readonly projection: RunProjection;
   private readonly lifecycle: RunLifecycle;
   protected readonly internals: RuntimeInternals;
-  private readonly goalRuntime: GoalRuntime;
 
   validateGraph(input: unknown): GraphSpec {
     return this.authoring.validateGraph(input);
@@ -243,38 +230,6 @@ export class BurnGraphServiceBase {
 
   getGraph(graphId: string): GraphSpec {
     return this.authoring.getGraph(graphId);
-  }
-
-  getGoal(reference: string): GoalSnapshot | null {
-    return this.goalRuntime.get(reference);
-  }
-
-  proposeGoalAmendment(
-    reference: string,
-    actorId: string,
-    idempotencyKey: string,
-    input: unknown,
-  ) {
-    return this.goalRuntime.proposeAmendment(
-      reference,
-      actorId,
-      idempotencyKey,
-      input,
-    );
-  }
-
-  reviewGoalAmendment(
-    amendmentId: string,
-    actorId: string,
-    idempotencyKey: string,
-    input: unknown,
-  ) {
-    return this.goalRuntime.reviewAmendment(
-      amendmentId,
-      actorId,
-      idempotencyKey,
-      input,
-    );
   }
 
   validateCheck(input: unknown): CheckSpec {
@@ -632,12 +587,6 @@ export class BurnGraphServiceBase {
           true,
         );
       }
-      this.goalRuntime.assertReviewClaimAllowed(
-        runId,
-        nodeId,
-        actorId,
-        validated.spec,
-      );
       const row = this.internals.nodeRow(runId, nodeId);
       let status = NodeStatusSchema.parse(stringValue(row, "status"));
       let recoveredExpiredAttempt: {
@@ -928,7 +877,6 @@ export class BurnGraphServiceBase {
   ): MutationResult<RuntimeNode> {
     const checkpoint = CheckpointInputSchema.parse(input);
     const runId = this.internals.resolveRun(reference);
-    const validated = this.internals.graphForRun(runId);
     const now = this.now();
     const at = now.toISOString();
     const sequence = this.database.immediate(() => {
@@ -938,12 +886,6 @@ export class BurnGraphServiceBase {
         actorId,
         now,
         expectation,
-      );
-      this.goalRuntime.validateCheckpoint(
-        runId,
-        nodeId,
-        checkpoint,
-        validated.spec,
       );
       const attempt = numberValue(row, "attempt");
       this.database.db
@@ -1056,13 +998,6 @@ export class BurnGraphServiceBase {
         actorId,
         now,
         expectation,
-      );
-      this.goalRuntime.validateCompletion(
-        runId,
-        nodeId,
-        actorId,
-        completion,
-        validated.spec,
       );
       const attempt = numberValue(node, "attempt");
       const assignmentId = optionalString(node, "assignment_id");
@@ -1554,11 +1489,7 @@ export class BurnGraphServiceBase {
             if (
               error instanceof BurnGraphError &&
               error.retryable &&
-              [
-                "NODE_NOT_READY",
-                "RESOURCE_BUSY",
-                "REVIEW_INDEPENDENCE_REQUIRED",
-              ].includes(error.code)
+              ["NODE_NOT_READY", "RESOURCE_BUSY"].includes(error.code)
             ) {
               continue;
             }

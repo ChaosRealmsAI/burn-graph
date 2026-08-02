@@ -539,50 +539,6 @@ export class BurnGraphDatabase {
           .run();
       }
 
-      const goalRuntime = this.db
-        .query("SELECT version FROM schema_migrations WHERE version = 7")
-        .get() as { version: number } | null;
-      if (!goalRuntime) {
-        this.db.exec(`
-          CREATE TABLE goal_amendments (
-            amendment_id TEXT PRIMARY KEY,
-            idempotency_key TEXT NOT NULL UNIQUE,
-            review_idempotency_key TEXT UNIQUE,
-            run_id TEXT NOT NULL,
-            proposer_actor_id TEXT NOT NULL,
-            reason TEXT NOT NULL,
-            changes_json TEXT NOT NULL,
-            status TEXT NOT NULL
-              CHECK (status IN ('pending', 'applied', 'rejected')),
-            reviewer_actor_id TEXT,
-            review_json TEXT,
-            proposal_event_sequence INTEGER NOT NULL,
-            review_event_sequence INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE,
-            FOREIGN KEY (proposal_event_sequence)
-              REFERENCES events(sequence) ON DELETE RESTRICT,
-            FOREIGN KEY (review_event_sequence)
-              REFERENCES events(sequence) ON DELETE RESTRICT
-          );
-
-          CREATE INDEX goal_amendments_run_idx
-            ON goal_amendments(run_id, created_at, amendment_id);
-
-          CREATE INDEX goal_amendments_status_idx
-            ON goal_amendments(run_id, status, updated_at);
-        `);
-        this.db
-          .query(
-            `INSERT INTO schema_migrations
-             (version, name, applied_at)
-             VALUES (7, 'goal-graph-work',
-                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
-          )
-          .run();
-      }
-
       this.db.exec("COMMIT;");
     } catch (error) {
       if (this.db.inTransaction) {

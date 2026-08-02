@@ -31,7 +31,9 @@ describe("GraphSpec validation", () => {
     const invalid: GraphSpec = {
       ...graph,
       nodes: graph.nodes.map((node) =>
-        node.id === "left" ? { ...node, next: [{ to: "missing" }] } : node,
+        node.id === "left"
+          ? { ...node, next: [{ to: "missing" }] }
+          : node,
       ),
     };
     expectGraphError(() => validateGraphSpec(invalid), "UNKNOWN_NEXT");
@@ -66,38 +68,6 @@ describe("GraphSpec validation", () => {
           ? { ...node, next: [{ to: "join", maxTraversals: 2 }] }
           : node,
       ),
-    };
-    expectGraphError(() => validateGraphSpec(invalid), "INVALID_LOOP");
-  });
-
-  test("rejects a repair loop whose target cannot open before its Decision", () => {
-    const graph = loopGraph();
-    const work = graph.nodes.find((node) => node.id === "work")!;
-    const decision = graph.nodes.find((node) => node.id === "decide")!;
-    const invalid: GraphSpec = {
-      ...graph,
-      nodes: graph.nodes
-        .filter((node) => node.id !== "work")
-        .map((node) => {
-          if (node.id === "start") return { ...node, next: [{ to: "decide" }] };
-          if (node.id === "decide") {
-            return {
-              ...decision,
-              next: decision.next.map((edge) =>
-                edge.route === "repair"
-                  ? { ...edge, to: "dormant-repair" }
-                  : edge,
-              ),
-            };
-          }
-          return node;
-        })
-        .concat({
-          ...work,
-          id: "dormant-repair",
-          title: "Dormant repair",
-          next: [{ to: "decide" }],
-        }),
     };
     expectGraphError(() => validateGraphSpec(invalid), "INVALID_LOOP");
   });
