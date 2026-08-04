@@ -9,3 +9,6 @@ apps/viewer/dist/
 apps/product-preview/dist/
 .burn/graph/runtime/
 **/.burn/graph/runtime/
+
+# Runtime evidence, locks and Runs are never versioned.
+.agent-runtime/
