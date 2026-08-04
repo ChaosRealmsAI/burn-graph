@@ -48,7 +48,7 @@
         ],
         "doneWhen": [
           "The code repository preserves its pre-migration history.",
-          "The former claudeWang root location is absent.",
+          "The former V5 workspace root location is absent.",
           "No privacy/spec tree is tracked in the code repository."
         ],
         "outputSchema": null
