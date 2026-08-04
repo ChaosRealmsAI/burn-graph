@@ -15,6 +15,7 @@ import {
 } from "@burn-graph/core";
 import { type RenderScope } from "@burn-graph/render";
 import { Option } from "commander";
+import { PUBLIC_SCHEMA_VERSION } from "./public-io.ts";
 
 import {
   boundedInteger,
@@ -353,7 +354,7 @@ export function registerInspect(): void {
               // path sanitisation as every other envelope; forceCompact keeps
               // one JSON value per line even under --pretty.
               print({
-                schemaVersion: 1,
+                schemaVersion: PUBLIC_SCHEMA_VERSION,
                 ok: true,
                 command: "inspect.events",
                 data: event,

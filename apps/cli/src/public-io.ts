@@ -17,6 +17,9 @@ import {
 
 export const MAX_JSON_INPUT_BYTES = 2 * 1024 * 1024;
 export const MAX_ENVELOPE_BYTES = 256 * 1024;
+// Command topology is part of the public protocol. Removing or renaming a
+// command therefore requires this version to move even when JSON still decodes.
+export const PUBLIC_SCHEMA_VERSION = 2 as const;
 
 export interface NextAction {
   readonly id: string;
@@ -25,7 +28,7 @@ export interface NextAction {
 }
 
 export interface Envelope {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof PUBLIC_SCHEMA_VERSION;
   readonly ok: boolean;
   readonly command: string;
   readonly data?: unknown;
@@ -256,7 +259,7 @@ export function printEnvelope(
       const replayed =
         typeof data["replayed"] === "boolean" ? data["replayed"] : null;
       publicEnvelope = {
-        schemaVersion: 1,
+        schemaVersion: PUBLIC_SCHEMA_VERSION,
         ok: true,
         command: envelope.command,
         data: {
@@ -288,7 +291,7 @@ export function printEnvelope(
       };
     } else {
       publicEnvelope = {
-        schemaVersion: 1,
+        schemaVersion: PUBLIC_SCHEMA_VERSION,
         ok: false,
         command: envelope.command,
         error: {

@@ -21,39 +21,39 @@
     },
     "apps/cli": {
       "name": "@burn-graph/cli",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "apps/product-preview": {
       "name": "@burn-graph/product-preview",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "apps/viewer": {
       "name": "@burn-graph/viewer",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "packages/core": {
       "name": "@burn-graph/core",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "packages/design-system": {
       "name": "@burn-graph/design-system",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "packages/gate": {
       "name": "@burn-graph/gate",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "packages/render": {
       "name": "@burn-graph/render",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "packages/system-driver": {
       "name": "@burn-graph/system-driver",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
     "packages/templates": {
       "name": "@burn-graph/templates",
-      "version": "1.0.0-dev.3",
+      "version": "1.0.0-dev.4",
     },
   },
   "packages": {

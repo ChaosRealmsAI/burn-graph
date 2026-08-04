@@ -17,6 +17,7 @@ import {
 import { Command } from "commander";
 
 import {
+  PUBLIC_SCHEMA_VERSION,
   printEnvelope,
   readConfinedJsonInput,
   type Envelope,
@@ -120,7 +121,7 @@ export function success(
   } = {},
 ): void {
   print({
-    schemaVersion: 1,
+    schemaVersion: PUBLIC_SCHEMA_VERSION,
     ok: true,
     command,
     data,

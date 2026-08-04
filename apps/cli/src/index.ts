@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import {
@@ -34,7 +35,10 @@ import {
 } from "./support.ts";
 import packageMetadata from "../../../package.json";
 import { GRAPH_EXAMPLE_KINDS } from "./authoring.ts";
-import { MAX_JSON_INPUT_BYTES } from "./public-io.ts";
+import {
+  MAX_JSON_INPUT_BYTES,
+  PUBLIC_SCHEMA_VERSION,
+} from "./public-io.ts";
 import { registerExecution } from "./commands-execution.ts";
 import { registerAuthoring } from "./commands-authoring.ts";
 import { registerInspect } from "./commands-inspect.ts";
@@ -51,6 +55,7 @@ import {
 // scripts/version/sync.ts propagates that one value; `version:check` fails the
 // build when any manifest disagrees.
 const VERSION = packageMetadata.version;
+const PUBLIC_PROTOCOL = "burn-graph-public";
 
 // Root Help deliberately shows only the daily loop. Everything else stays
 // reachable through `help <topic>` and `--help`, so a source-blind AI meets
@@ -679,7 +684,7 @@ const helpTopics: Readonly<Record<string, unknown>> = {
   errors: {
     title: "Stable error envelope",
     shape: {
-      schemaVersion: 1,
+      schemaVersion: PUBLIC_SCHEMA_VERSION,
       ok: false,
       command: "stable command label",
       error: {
@@ -692,6 +697,13 @@ const helpTopics: Readonly<Record<string, unknown>> = {
     },
   },
 };
+
+program
+  .command("contract")
+  .description("return the digest-bound public command contract")
+  .action(() => {
+    success("contract", publicContract());
+  });
 
 program
   .command("help")
@@ -722,6 +734,44 @@ function commandPath(command: Command): readonly string[] {
     current = current.parent;
   }
   return parts;
+}
+
+function publicContract(): Readonly<Record<string, unknown>> {
+  const commands: Array<Readonly<Record<string, unknown>>> = [];
+  const visit = (command: Command): void => {
+    for (const child of command.commands) {
+      if (child.name().startsWith("__")) continue;
+      commands.push({
+        path: commandPath(child).join("."),
+        arguments: child.registeredArguments.map((argument) => ({
+          name: argument.name(),
+          required: argument.required,
+          variadic: argument.variadic,
+        })),
+        options: child.options
+          .filter((option) => !option.hidden)
+          .map((option) => option.flags)
+          .sort(),
+      });
+      visit(child);
+    }
+  };
+  visit(program);
+  commands.sort((left, right) =>
+    String(left["path"]).localeCompare(String(right["path"])))
+  ;
+  const contract = {
+    protocol: PUBLIC_PROTOCOL,
+    productVersion: VERSION,
+    schemaVersion: PUBLIC_SCHEMA_VERSION,
+    commands,
+  };
+  return {
+    ...contract,
+    digest: createHash("sha256")
+      .update(JSON.stringify(contract))
+      .digest("hex"),
+  };
 }
 
 // Root Help is an explicit list, not a filter over whatever happens to be
@@ -820,7 +870,7 @@ function helpPayload(
     })),
     input: detail.input ?? null,
     output: detail.output ?? {
-      schemaVersion: 1,
+      schemaVersion: PUBLIC_SCHEMA_VERSION,
       ok: true,
       command: key || "help",
       data: "command-specific JSON",
@@ -1081,7 +1131,7 @@ try {
     error.code.startsWith("commander.")
   ) {
     print({
-      schemaVersion: 1,
+      schemaVersion: PUBLIC_SCHEMA_VERSION,
       ok: false,
       command: activeCommand,
       error: {
@@ -1118,7 +1168,7 @@ try {
               error instanceof Error ? error.message : String(error),
             );
     print({
-      schemaVersion: 1,
+      schemaVersion: PUBLIC_SCHEMA_VERSION,
       ok: false,
       command: activeCommand,
       error: {
